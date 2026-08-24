@@ -1,0 +1,29 @@
+{
+  "SDKVersion": 2,
+  "UUID": "com.pcmon.metrics",
+  "Name": "PC Monitor",
+  "Author": "PC Monitor",
+  "Version": "1.0.0.0",
+  "Description": "Живі показники з PC Monitor прямо на клавішах: процесор, пам'ять, GPU, мережа, диск — із міні-графіком за останні хвилини.",
+  "Icon": "assets/plugin",
+  "Category": "PC Monitor",
+  "CategoryIcon": "assets/category",
+  "CodePath": "app.html",
+  "Software": { "MinimumVersion": "6.0" },
+  "OS": [
+    { "Platform": "windows", "MinimumVersion": "10" },
+    { "Platform": "mac", "MinimumVersion": "10.14" }
+  ],
+  "Actions": [
+    {
+      "UUID": "com.pcmon.metrics.value",
+      "Name": "Показник",
+      "Icon": "assets/action",
+      "Tooltip": "Живий показник із PC Monitor з міні-графіком",
+      "Controllers": ["Keypad"],
+      "PropertyInspectorPath": "pi.html",
+      "SupportedInMultiActions": false,
+      "States": [{ "Image": "assets/key", "TitleAlignment": "top" }]
+    }
+  ]
+}

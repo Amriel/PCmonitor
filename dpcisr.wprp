@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  PC Monitor — профіль трасування для пошуку драйверів, що спричиняють затримки.
+
+  Це файл налаштувань для wpr.exe (Windows Performance Recorder) — штатного
+  інструмента, вбудованого у Windows 10/11. Він каже ядру, які події записувати:
+
+    Dpc        — відкладені виклики процедур драйверів (головне джерело затримок)
+    Interrupt  — апаратні переривання (ISR)
+    ImageLoad  — які модулі й за якими адресами завантажені; саме це дозволяє
+                 перетворити адресу процедури на ІМ'Я ФАЙЛУ ДРАЙВЕРА
+    CSwitch    — перемикання контексту, щоб бачити картину загалом
+
+  Жодного власного драйвера не встановлюється: усе це вміє сама Windows.
+  Потрібні лише права адміністратора.
+-->
+<WindowsPerformanceRecorder Version="1.0" Author="PC Monitor" Comments="DPC/ISR latency">
+  <Profiles>
+
+    <!-- Які події ядра збирати -->
+    <SystemCollector Id="SysCollector" Name="PCMonitor Kernel Collector">
+      <BufferSize Value="1024"/>
+      <Buffers Value="256"/>
+    </SystemCollector>
+
+    <SystemProvider Id="SysProvider">
+      <Keywords>
+        <Keyword Value="ProcessThread"/>
+        <Keyword Value="Loader"/>
+        <Keyword Value="Interrupt"/>
+        <Keyword Value="DPC"/>
+        <Keyword Value="CSwitch"/>
+        <Keyword Value="SampledProfile"/>
+      </Keywords>
+      <Stacks>
+        <Stack Value="ProfileInterrupt"/>
+      </Stacks>
+    </SystemProvider>
+
+    <Profile Id="DpcIsr.Verbose.File" Name="DpcIsr" Description="DPC/ISR per driver"
+             LoggingMode="File" DetailLevel="Verbose">
+      <Collectors>
+        <SystemCollectorId Value="SysCollector">
+          <SystemProviderId Value="SysProvider"/>
+        </SystemCollectorId>
+      </Collectors>
+    </Profile>
+
+    <!-- Полегшений варіант: без стеків, менший файл -->
+    <SystemProvider Id="SysProviderLight">
+      <Keywords>
+        <Keyword Value="ProcessThread"/>
+        <Keyword Value="Loader"/>
+        <Keyword Value="Interrupt"/>
+        <Keyword Value="DPC"/>
+      </Keywords>
+    </SystemProvider>
+
+    <Profile Id="DpcIsr.Light.File" Name="DpcIsrLight" Description="DPC/ISR per driver (light)"
+             LoggingMode="File" DetailLevel="Light">
+      <Collectors>
+        <SystemCollectorId Value="SysCollector">
+          <SystemProviderId Value="SysProviderLight"/>
+        </SystemCollectorId>
+      </Collectors>
+    </Profile>
+
+  </Profiles>
+</WindowsPerformanceRecorder>

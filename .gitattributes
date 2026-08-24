@@ -1,0 +1,12 @@
+# Скрипти Windows мають лишатися з CRLF, інакше cmd/PowerShell їх ламає
+* text=auto
+*.bat  text eol=crlf
+*.vbs  text eol=crlf
+*.ps1  text eol=crlf
+*.iss  text eol=crlf
+*.py   text eol=lf
+*.md   text eol=lf
+*.html text eol=lf
+*.json text eol=lf
+*.ico  binary
+*.png  binary

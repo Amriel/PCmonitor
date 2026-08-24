@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>PC Monitor</title></head>
+<body><canvas id="c" width="144" height="144" style="display:none"></canvas>
+<script>
+/* ═══════════════════════════════════════════════════════════════════════
+   Плагін PC Monitor для Stream Deck
+
+   Як це працює: Stream Deck запускає цю сторінку у власному Chromium і
+   викликає глобальну функцію connectElgatoStreamDeckSocket(...). Ми
+   під'єднуємось до його WebSocket, реєструємось, і далі раз на секунду
+   малюємо кожну клавішу власноруч на canvas та надсилаємо картинку через
+   setImage.
+
+   Малюємо самі, а не покладаємось на штатний заголовок, з однієї причини:
+   штатний заголовок обрізає довгі назви посеред слова («GPU Memoic»,
+   «Memory Jun»). Тут назва вимірюється й за потреби зменшується, щоб
+   влізти цілком.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+let ws = null, uuid = "";
+const keys = new Map();          // context -> {settings, series}
+let data = null, lastOk = 0;
+
+const METRICS = {
+  cpu:       { title: "Процесор",  unit: "%",   max: 100, color: "#4ade80" },
+  core_max:  { title: "Пік ядра",  unit: "%",   max: 100, color: "#fbbf24" },
+  ram_pct:   { title: "Пам'ять",   unit: "%",   max: 100, color: "#a78bfa" },
+  gpu:       { title: "GPU",       unit: "%",   max: 100, color: "#60a5fa" },
+  net:       { title: "Мережа",    unit: "bps", max: 0,   color: "#f472b6" },
+  disk:      { title: "Диск",      unit: "bps", max: 0,   color: "#38bdf8" },
+  // температури й відеопам'ять
+  gpu_temp:  { title: "GPU темп.", unit: "°C",  max: 95,  color: "#fb923c", warn: 83 },
+  disk_temp: { title: "Диск темп.",unit: "°C",  max: 80,  color: "#f59e0b", warn: 60 },
+  vram_pct:  { title: "Відеопам'ять", unit: "%", max: 100, color: "#c084fc", warn: 92 },
+  // Назва без слова «вільно»: що саме показує клавіша, людина обрала сама
+  // в її налаштуваннях — дублювати це на екрані немає сенсу.
+  vram_free: { title: "Відеопам'ять", unit: "B", max: 0,   color: "#34d399",
+               invert: true },     // тут менше = гірше, тому поріг навпаки
+  // зведена клавіша: пам'ять великим, температура під нею
+  gpu_all:   { title: "GPU", unit: "combo", max: 100, color: "#c084fc" },
+  ram_all:   { title: "Пам'ять", unit: "combo", max: 100, color: "#a78bfa" },
+};
+
+function connectElgatoStreamDeckSocket(inPort, inUUID, inRegisterEvent, inInfo) {
+  uuid = inUUID;
+  ws = new WebSocket("ws://127.0.0.1:" + inPort);
+  ws.onopen = () => send({ event: inRegisterEvent, uuid: inUUID });
+  ws.onmessage = (e) => {
+    let m; try { m = JSON.parse(e.data); } catch (_) { return; }
+    const ctx = m.context;
+    if (m.event === "willAppear") {
+      keys.set(ctx, { settings: m.payload.settings || {}, series: [] });
+      draw(ctx);
+    } else if (m.event === "willDisappear") {
+      keys.delete(ctx);
+    } else if (m.event === "didReceiveSettings") {
+      const k = keys.get(ctx);
+      if (k) { k.settings = m.payload.settings || {}; draw(ctx); }
+    } else if (m.event === "keyDown") {
+      // натиск нічого не змінює в системі — просто оновлюємо негайно
+      poll();
+    }
+  };
+}
+window.connectElgatoStreamDeckSocket = connectElgatoStreamDeckSocket;
+
+function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+
+function port() {
+  for (const k of keys.values()) if (k.settings && k.settings.port) return k.settings.port;
+  return "8787";
+}
+
+async function poll() {
+  try {
+    const r = await fetch("http://127.0.0.1:" + port() + "/api/sd",
+                          { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status);
+    data = await r.json();
+    lastOk = Date.now();
+  } catch (_) {
+    data = null;                                  // монітор не відповідає
+  }
+  for (const ctx of keys.keys()) draw(ctx);
+}
+setInterval(poll, 1000);
+poll();
+
+/* ── малювання клавіші ───────────────────────────────────────────────── */
+function fmtRate(v) {
+  if (v < 1024) return Math.round(v) + " Б/с";
+  if (v < 1048576) return (v / 1024).toFixed(v < 10240 ? 1 : 0) + " КБ/с";
+  if (v < 1073741824) return (v / 1048576).toFixed(v < 10485760 ? 1 : 0) + " МБ/с";
+  return (v / 1073741824).toFixed(1) + " ГБ/с";
+}
+
+function fmtBytes(v) {
+  if (v < 1048576) return Math.round(v / 1024) + " МБ";
+  if (v < 1073741824) return (v / 1048576).toFixed(0) + " МБ";
+  return (v / 1073741824).toFixed(v < 10737418240 ? 1 : 0) + " ГБ";
+}
+
+function plural(n) {          // 1 ядро, 2 ядра, 5 ядер, 32 ядра
+  const a = Math.abs(n) % 100, b = a % 10;
+  if (a > 10 && a < 20) return "ядер";
+  if (b > 1 && b < 5) return "ядра";
+  return b === 1 ? "ядро" : "ядер";
+}
+
+function fitText(g, text, maxW, startPx, weight) {
+  // Зменшуємо шрифт, доки напис не влізе цілком. Обрізати назву посеред
+  // слова — саме те, чого ми уникаємо.
+  let px = startPx;
+  do {
+    g.font = `${weight} ${px}px "Segoe UI", system-ui, sans-serif`;
+    if (g.measureText(text).width <= maxW) return px;
+    px -= 1;
+  } while (px > 8);
+  return px;
+}
+
+function draw(ctx) {
+  const k = keys.get(ctx); if (!k) return;
+  const s = k.settings || {};
+  const key = s.metric || "cpu";
+  const M = METRICS[key] || METRICS.cpu;
+  const c = document.getElementById("c"), g = c.getContext("2d");
+  const W = 144, H = 144;
+
+  g.fillStyle = "#0b0f15"; g.fillRect(0, 0, W, H);
+
+  if (!data) {                                    // монітор не відповідає
+    g.fillStyle = "#f87171";
+    g.font = '600 17px "Segoe UI", system-ui, sans-serif';
+    g.textAlign = "center";
+    g.fillText("PC Monitor", W / 2, 62);
+    g.font = '400 15px "Segoe UI", system-ui, sans-serif';
+    g.fillStyle = "#8b94a7";
+    g.fillText("не запущено", W / 2, 86);
+    push(ctx, c); return;
+  }
+
+  /* ── зведена клавіша GPU: пам'ять зверху, температура під нею ─────── */
+  if (key === "gpu_all") { drawGpuAll(g, c, ctx, s); return; }
+  if (key === "ram_all") { drawRamAll(g, c, ctx, s); return; }
+
+  const raw = data[key];
+  const series = (data.series && data.series[key]) || [];
+  const isRate = M.unit === "bps";
+  const isBytes = M.unit === "B";
+  const isTemp = M.unit === "°C";
+  const title = s.label || M.title;
+
+  // Датчика може просто не бути (немає NVIDIA, диск не віддає температуру).
+  // Показати нуль було б брехнею, тому пишемо прочерк і пояснення.
+  if(raw == null){
+    g.fillStyle = "#D6DEEC"; g.textAlign = "center";
+    const tp0 = fitText(g, title, W - 16, 20, 600);
+    g.fillText(title, W / 2, 4 + tp0);
+    g.font = '700 44px "Segoe UI", system-ui, sans-serif';
+    g.fillStyle = "#4a5262"; g.fillText("—", W / 2, 84);
+    fitText(g, "датчик недоступний", W - 8, 17, 500);
+    g.fillStyle = "#A8B3C7"; g.fillText("датчик недоступний", W / 2, 118);
+    push(ctx, c); return;
+  }
+
+  const val = raw || 0;
+  const text = isRate ? fmtRate(val)
+             : isBytes ? fmtBytes(val)
+             : isTemp ? Math.round(val) + "°"
+             : (val < 10 ? val.toFixed(1) : Math.round(val)) + "%";
+
+  // Поріг тривоги: власний, якщо заданий, інакше розумний для цього датчика.
+  // Для «вільно» логіка обернена: тривога, коли значення ВПАЛО нижче порога.
+  const warn = (s.warn !== undefined && s.warn !== null && s.warn !== "")
+             ? +s.warn : (M.warn || (isRate || isBytes ? 0 : 90));
+  const hot = warn > 0 && (M.invert ? val <= warn : val >= warn);
+  const color = hot ? "#f87171" : (s.color || M.color);
+
+  /* Розкладка згори вниз, без накладань — саме через них текст на графіку
+     ставав нечитабельним:
+        0..30    назва
+        30..86   значення (велике)
+        86..100  дрібний підпис
+        100..144 смуга графіка                                            */
+  const GTOP = 100;
+
+  // ── смуга графіка внизу ─────────────────────────────────────────────
+  if (series.length > 1) {
+    const n = Math.min(series.length, 60);
+    const pts = series.slice(-n);
+    const top = (isRate || isBytes) ? Math.max(...pts, 1) : (M.max || 100);
+    const GH = H - GTOP;
+    const bw = W / (n - 1 || 1);
+    const y = v => H - Math.max(1, Math.min(1, v / top) * GH);
+
+    g.fillStyle = color + "38";
+    g.beginPath(); g.moveTo(0, H);
+    pts.forEach((v, i) => g.lineTo(i * bw, y(v)));
+    g.lineTo(W, H); g.closePath(); g.fill();
+
+    g.strokeStyle = color; g.lineWidth = 2;
+    g.lineJoin = "round"; g.beginPath();
+    pts.forEach((v, i) => (i ? g.lineTo(i * bw, y(v)) : g.moveTo(0, y(v))));
+    g.stroke();
+  }
+
+  // ── назва (вгорі, цілком) ───────────────────────────────────────────
+  g.textAlign = "center";
+  const tp = fitText(g, title, W - 16, 20, 600);
+  g.fillStyle = "#D6DEEC";
+  g.fillText(title, W / 2, 4 + tp);
+
+  // ── значення ────────────────────────────────────────────────────────
+  const vp = fitText(g, text, W - 22, 42, 700);
+  g.fillStyle = hot ? "#fca5a5" : "#ffffff";
+  g.fillText(text, W / 2, 78);
+
+  // ── дрібний підпис (над графіком, не на ньому) ──────────────────────
+  let sub = "";
+  if (key === "cpu" && data.ncpu) sub = data.ncpu + " " + plural(data.ncpu);
+  else if (key === "ram_pct" && data.ram_total)
+    sub = (data.ram_used / 1073741824).toFixed(1) + " з "
+        + (data.ram_total / 1073741824).toFixed(0) + " ГіБ";
+  else if (key === "core_max") sub = "найгарячіше";
+  else if ((key === "vram_pct" || key === "vram_free") && data.vram_total)
+    sub = (data.vram_used / 1073741824).toFixed(1) + " з "
+        + (data.vram_total / 1073741824).toFixed(0) + " ГіБ";
+  else if (key === "gpu_temp" && data.gpu_fan != null)
+    sub = "вентилятор " + data.gpu_fan + "%";
+  else if (key === "disk_temp") sub = "найгарячіший диск";
+  if (sub) {
+    fitText(g, sub, W - 8, 19, 500);
+    g.fillStyle = "#A8B3C7";
+    g.fillText(sub, W / 2, 96);
+  }
+
+  // Дані застаріли — тонка смужка згори, щоб цифра не брехала мовчки
+  if (data.age != null && data.age > 12) {
+    g.fillStyle = "#fbbf24"; g.fillRect(0, 0, W, 3);
+  }
+  push(ctx, c);
+}
+
+/* Зведена клавіша GPU.
+   Дві величини на 72 пікселях — межа читабельності, тому суворо:
+   назва дрібно вгорі, ПАМ'ЯТЬ великим по центру, температура під нею
+   середнім і власним кольором, унизу смуга заповнення пам'яті.
+   Третю цифру сюди не додаємо — стане нечитабельно. */
+function drawGpuAll(g, c, ctx, s) {
+  const W = 144, H = 144;
+  const total = data.vram_total || 0;
+  const used  = data.vram_used  || 0;
+  const free  = data.vram_free != null ? data.vram_free : (total - used);
+  const temp  = data.gpu_temp;
+  const showFree = (s.vram_show === "free");
+  const memVal = showFree ? free : used;
+
+  if (!total && temp == null) {                    // відеокарти не видно
+    g.textAlign = "center";
+    const tp = fitText(g, s.label || "GPU", W - 16, 20, 600);
+    g.fillStyle = "#D6DEEC"; g.fillText(s.label || "GPU", W / 2, 4 + tp);
+    g.font = '700 40px "Segoe UI", system-ui, sans-serif';
+    g.fillStyle = "#4a5262"; g.fillText("—", W / 2, 82);
+    fitText(g, "датчик недоступний", W - 8, 17, 500);
+    g.fillStyle = "#A8B3C7"; g.fillText("датчик недоступний", W / 2, 118);
+    push(ctx, c); return;
+  }
+
+  const pct = total ? used / total * 100 : 0;
+  const memWarn = +(s.warn || 92);
+  const tWarn = +(s.tempwarn || 83);
+  const memHot = total && pct >= memWarn;
+  const tHot = temp != null && temp >= tWarn;
+
+  // смуга заповнення пам'яті внизу
+  const series = (data.series && data.series.vram_pct) || [];
+  const GTOP = 112;
+  if (series.length > 1) {
+    const n = Math.min(series.length, 60), pts = series.slice(-n);
+    const GH = H - GTOP, bw = W / (n - 1 || 1);
+    const y = v => H - Math.max(1, Math.min(1, v / 100) * GH);
+    g.fillStyle = (memHot ? "#f87171" : "#c084fc") + "38";
+    g.beginPath(); g.moveTo(0, H);
+    pts.forEach((v, i) => g.lineTo(i * bw, y(v)));
+    g.lineTo(W, H); g.closePath(); g.fill();
+    g.strokeStyle = memHot ? "#f87171" : "#c084fc";
+    g.lineWidth = 2; g.lineJoin = "round"; g.beginPath();
+    pts.forEach((v, i) => (i ? g.lineTo(i * bw, y(v)) : g.moveTo(0, y(v))));
+    g.stroke();
+  }
+
+  g.textAlign = "center";
+
+  // назва
+  const title = s.label || "GPU";
+  const tp = fitText(g, title, W - 14, 19, 600);
+  g.fillStyle = "#C3CDDD"; g.fillText(title, W / 2, 2 + tp);
+
+  // пам'ять — головне число
+  const memText = total ? fmtBytes(memVal) : "—";
+  fitText(g, memText, W - 18, 38, 700);
+  g.fillStyle = memHot ? "#fca5a5" : "#ffffff";
+  g.fillText(memText, W / 2, 62);
+
+  // підпис до пам'яті: з чого саме
+  if (total) {
+    // Просто «з N ГБ»: режим (зайнято чи вільно) людина обрала сама
+    // в налаштуваннях клавіші, повторювати це на екрані зайве.
+    const of = "з " + fmtBytes(total);
+    fitText(g, of, W - 8, 19, 500);
+    g.fillStyle = "#A8B3C7"; g.fillText(of, W / 2, 78);
+  }
+
+  // температура — під пам'яттю, власним кольором
+  if (temp != null) {
+    const tt = Math.round(temp) + "°C";
+    fitText(g, tt, W - 18, 30, 700);
+    g.fillStyle = tHot ? "#f87171" : (temp >= tWarn - 10 ? "#fbbf24" : "#4ade80");
+    g.fillText(tt, W / 2, 106);
+  }
+
+  if (data.age != null && data.age > 12) {
+    g.fillStyle = "#fbbf24"; g.fillRect(0, 0, W, 3);
+  }
+  push(ctx, c);
+}
+
+/* Зведена клавіша пам'яті: ГІГАБАЙТИ великим, відсоток під ними.
+   Окремо від «Пам'ять — %», бо у відсотках не видно головного —
+   скільки саме зайнято і скільки лишилось. */
+function drawRamAll(g, c, ctx, s) {
+  const W = 144, H = 144;
+  const total = data.ram_total || 0;
+  const used  = data.ram_used  || 0;
+  const free  = Math.max(0, total - used);
+  const showFree = (s.vram_show === "free");
+  const memVal = showFree ? free : used;
+  const pct = total ? used / total * 100 : 0;
+  const warn = +(s.warn || 85);
+  const hot = total && pct >= warn;
+  const title = s.label || "Пам'ять";
+
+  if (!total) {
+    g.textAlign = "center";
+    const tp = fitText(g, title, W - 16, 20, 600);
+    g.fillStyle = "#D6DEEC"; g.fillText(title, W / 2, 4 + tp);
+    g.font = '700 40px "Segoe UI", system-ui, sans-serif';
+    g.fillStyle = "#4a5262"; g.fillText("—", W / 2, 82);
+    push(ctx, c); return;
+  }
+
+  const series = (data.series && data.series.ram_pct) || [];
+  const GTOP = 112;
+  if (series.length > 1) {
+    const n = Math.min(series.length, 60), pts = series.slice(-n);
+    const GH = H - GTOP, bw = W / (n - 1 || 1);
+    const y = v => H - Math.max(1, Math.min(1, v / 100) * GH);
+    const col = hot ? "#f87171" : "#a78bfa";
+    g.fillStyle = col + "38";
+    g.beginPath(); g.moveTo(0, H);
+    pts.forEach((v, i) => g.lineTo(i * bw, y(v)));
+    g.lineTo(W, H); g.closePath(); g.fill();
+    g.strokeStyle = col; g.lineWidth = 2; g.lineJoin = "round"; g.beginPath();
+    pts.forEach((v, i) => (i ? g.lineTo(i * bw, y(v)) : g.moveTo(0, y(v))));
+    g.stroke();
+  }
+
+  g.textAlign = "center";
+  const tp = fitText(g, title, W - 14, 19, 600);
+  g.fillStyle = "#C3CDDD"; g.fillText(title, W / 2, 2 + tp);
+
+  const memText = fmtBytes(memVal);
+  fitText(g, memText, W - 18, 38, 700);
+  g.fillStyle = hot ? "#fca5a5" : "#ffffff";
+  g.fillText(memText, W / 2, 62);
+
+  const of = "з " + fmtBytes(total);
+  fitText(g, of, W - 8, 19, 500);
+  g.fillStyle = "#A8B3C7"; g.fillText(of, W / 2, 78);
+
+  const pt = Math.round(pct) + "%";
+  fitText(g, pt, W - 18, 30, 700);
+  g.fillStyle = hot ? "#f87171" : (pct >= warn - 15 ? "#fbbf24" : "#4ade80");
+  g.fillText(pt, W / 2, 106);
+
+  if (data.age != null && data.age > 12) {
+    g.fillStyle = "#fbbf24"; g.fillRect(0, 0, W, 3);
+  }
+  push(ctx, c);
+}
+
+function push(ctx, canvas) {
+  send({ event: "setImage", context: ctx,
+         payload: { image: canvas.toDataURL("image/png"), target: 0 } });
+  // Штатний заголовок вимикаємо: усе, що треба, вже намальовано на картинці.
+  send({ event: "setTitle", context: ctx, payload: { title: "", target: 0 } });
+}
+</script></body></html>

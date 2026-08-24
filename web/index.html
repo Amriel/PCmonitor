@@ -1,0 +1,3005 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<!-- Токен сесії підставляє сам монітор, віддаючи цю сторінку. Він новий при
+     кожному запуску. Стороння сторінка його не побачить: браузер не дозволить
+     їй прочитати відповідь із нашого походження. -->
+<meta name="pcmon-token" content="__PCMON_TOKEN__">
+<title>PC Monitor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%2310131a'/><rect x='18' y='52' width='14' height='30' rx='3' fill='%234ade80'/><rect x='43' y='30' width='14' height='52' rx='3' fill='%234ade80'/><rect x='68' y='42' width='14' height='40' rx='3' fill='%234ade80'/></svg>">
+<script src="/chart.umd.js"></script>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161a22; --panel2:#1c212c; --line:#262c38;
+    --tx:#dde3ee; --tx2:#8b94a7; --acc:#4ade80; --blue:#60a5fa; --vio:#a78bfa;
+    --red:#f87171; --org:#fbbf24; --chip:#232a37;
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  html,body{height:100%}
+  body{background:var(--bg); color:var(--tx);
+    font:14px/1.45 "Segoe UI",system-ui,-apple-system,sans-serif;}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#2b3240;border-radius:5px}
+  ::-webkit-scrollbar-track{background:transparent}
+
+  .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;gap:12px;
+    padding:10px 16px;background:rgba(14,17,22,.92);backdrop-filter:blur(6px);
+    border-bottom:1px solid var(--line)}
+  .logo{display:flex;align-items:center;gap:9px;font-weight:600;font-size:15px;white-space:nowrap}
+  .logo .dot{width:9px;height:9px;border-radius:50%;background:var(--acc);
+    box-shadow:0 0 8px var(--acc)}
+  .badge{font-size:11.5px;color:var(--tx2);background:var(--chip);border:1px solid var(--line);
+    padding:3px 9px;border-radius:20px;white-space:nowrap}
+  .badge.ok{color:var(--acc)} .badge.warn{color:var(--org)}
+  select,input[type=text]{background:var(--panel2);color:var(--tx);border:1px solid var(--line);
+    border-radius:8px;padding:6px 10px;font-size:13px;outline:none}
+  select:focus,input:focus{border-color:var(--blue)}
+  .spacer{flex:1}
+  .btn{background:var(--panel2);border:1px solid var(--line);color:var(--tx);cursor:pointer;
+    border-radius:8px;padding:6px 12px;font-size:13px;transition:.15s}
+  .btn:hover{border-color:var(--blue);color:#fff}
+  .btn.small{padding:3px 9px;font-size:12px;border-radius:6px}
+  .btn.icon{padding:3px 8px}
+  .btn.active{border-color:var(--acc);color:var(--acc)}
+  /* Посилань у стилях не було зовсім — бралося типове браузерне синє (#0000EE),
+     а воно на темному тлі майже не читається. Тепер приглушений синій теми. */
+  a{color:var(--blue);text-decoration:none}
+  a:hover{color:#93c5fd;text-decoration:underline}
+  /* посилання, що має виглядати кнопкою (як сусідні дії поруч) */
+  a.btn{display:inline-block;color:var(--tx);text-decoration:none;line-height:1.35}
+  a.btn:hover{border-color:var(--blue);color:#fff;text-decoration:none}
+
+  /* контекстне меню процесів */
+  #ctx{position:fixed;z-index:400;display:none;min-width:230px;padding:5px;
+    background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+    box-shadow:0 12px 34px rgba(0,0,0,.55);font-size:13px}
+  #ctx.open{display:block}
+  #ctx .ci{padding:7px 11px;border-radius:7px;cursor:pointer;white-space:nowrap;
+    display:flex;justify-content:space-between;gap:14px;align-items:center}
+  #ctx .ci:hover{background:#2a3140}
+  #ctx .ci.danger{color:var(--red)}
+  #ctx .ci.danger:hover{background:#3a2226}
+  #ctx .ci .hint{color:var(--tx2);font-size:11.5px}
+  #ctx .sep{height:1px;background:var(--line);margin:5px 3px}
+  #ctx .hdr{padding:6px 11px 8px;color:var(--tx2);font-size:11.5px;
+    border-bottom:1px solid var(--line);margin-bottom:4px}
+  #ctx .sub{display:none;padding:3px 0 3px 9px}
+  #ctx .sub.open{display:block}
+
+  /* термінал */
+  .term{background:#0a0d12;border:1px solid var(--line);border-radius:10px;
+    padding:11px 13px;font-family:ui-monospace,Consolas,monospace;font-size:12.5px;
+    line-height:1.5;white-space:pre-wrap;word-break:break-word;
+    max-height:420px;overflow:auto;color:#cbd5e1}
+  .term .cmd{color:var(--acc)}
+  .term .meta{color:var(--tx2);font-size:11.5px}
+  .term .err{color:var(--red)}
+  #cmd-input{flex:1;background:#0a0d12;border:1px solid var(--line);border-radius:8px;
+    color:var(--tx);padding:9px 12px;font-family:ui-monospace,Consolas,monospace;
+    font-size:13px;outline:none}
+  #cmd-input:focus{border-color:var(--blue)}
+  tr.prow{cursor:pointer}
+  tr.prow:hover{background:#1a1f29}
+  .frozenbar{background:rgba(96,165,250,.10);border:1px solid #2c4a72;
+    border-radius:9px;padding:8px 11px;margin-bottom:10px;font-size:12.5px}
+
+  /* вкладки */
+  .tabs{position:sticky;top:49px;z-index:45;display:flex;gap:2px;padding:0 16px;
+    background:rgba(14,17,22,.92);backdrop-filter:blur(6px);border-bottom:1px solid var(--line)}
+  .tab{background:none;border:none;border-bottom:2px solid transparent;color:var(--tx2);
+    cursor:pointer;padding:10px 16px;font-size:13.5px;font-weight:500;transition:.15s;
+    display:flex;align-items:center;gap:7px;font-family:inherit}
+  .tab:hover{color:var(--tx)}
+  .tab.active{color:var(--tx);border-bottom-color:var(--acc)}
+  .tabbadge{background:var(--org);color:#171310;border-radius:9px;padding:0 6px;
+    font-size:11px;font-weight:700;min-width:17px;text-align:center}
+  .tabbadge:empty{display:none}
+  .pane{display:none} .pane.active{display:block}
+
+  main{max-width:1500px;margin:0 auto;padding:16px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+  .card .t{font-size:11.5px;color:var(--tx2);text-transform:uppercase;letter-spacing:.4px}
+  .card .v{font-size:21px;font-weight:600;margin-top:3px;font-variant-numeric:tabular-nums}
+  .card .s{font-size:12px;color:var(--tx2);margin-top:2px}
+  .card.alert .v{color:var(--org)}
+
+  /* Температури: один компактний рядок під картками «Зараз».
+     Окрема вкладка для трьох чисел була зайвою — тут вони поруч із
+     рештою показників, де на них і дивляться. */
+  .tstrip{display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin:-4px 0 14px}
+  .tchip{display:inline-flex;align-items:baseline;gap:6px;background:var(--panel);
+    border:1px solid var(--line);border-radius:9px;padding:5px 10px;font-size:12.5px;
+    white-space:nowrap}
+  .tchip b{font-weight:500;color:var(--tx2)}
+  .tchip .tv{font-size:14.5px;font-weight:600;font-variant-numeric:tabular-nums}
+  .tchip.hot{border-color:#5a3a12}
+  .tstrip .tbtn{background:none;border:none;color:var(--tx2);cursor:pointer;
+    font-size:12.5px;padding:5px 4px;text-decoration:underline;text-underline-offset:3px}
+  .tstrip .tbtn:hover{color:var(--tx)}
+  #temps-more{margin:-8px 0 14px}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:14px;margin-bottom:14px}
+  .panel h2{font-size:13.5px;font-weight:600;color:var(--tx2);text-transform:uppercase;
+    letter-spacing:.5px;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+  .charts{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:1000px){.charts{grid-template-columns:1fr}}
+  .chartbox{position:relative;height:220px}
+
+  /* підозрілі */
+  .susp{border-color:#4a3520;background:linear-gradient(180deg,#1d1a14,#161a22)}
+  .susp-item{display:flex;gap:12px;align-items:flex-start;padding:10px;border:1px solid #3a3020;
+    border-radius:10px;background:#1a1812;margin-bottom:8px}
+  .susp-item:last-child{margin-bottom:0}
+  .score{min-width:46px;text-align:center;font-weight:700;font-size:15px;border-radius:8px;
+    padding:6px 4px}
+  .score.hi{background:#3b1717;color:var(--red)} .score.mid{background:#3b2d12;color:var(--org)}
+  .susp-item .nm{font-weight:600;font-size:14px}
+  .susp-item ul{margin:4px 0 6px 16px;color:var(--tx2);font-size:12.5px}
+  .susp-item .acts{display:flex;gap:6px;margin-top:2px}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{font-size:11px;color:var(--tx2);text-transform:uppercase;letter-spacing:.4px;
+    text-align:right;padding:7px 8px;border-bottom:1px solid var(--line);cursor:pointer;
+    white-space:nowrap;user-select:none}
+  th:first-child{text-align:left}
+  th.sorted{color:var(--blue)}
+  td{padding:6px 8px;border-bottom:1px solid #1d222c;text-align:right;
+    font-variant-numeric:tabular-nums;white-space:nowrap}
+  td:first-child{text-align:left}
+  tbody tr.approw{cursor:pointer}
+  tbody tr.approw:hover{background:#1a1f29}
+  .nm-cell{display:flex;align-items:center;gap:7px;max-width:280px}
+  .nm-cell .n{overflow:hidden;text-overflow:ellipsis}
+  .tag{font-size:10px;padding:1px 6px;border-radius:9px;font-weight:600;letter-spacing:.3px}
+  .tag.run{background:#12291c;color:var(--acc)}
+  .tag.new{background:#152238;color:var(--blue)}
+  .tag.eye{background:#241f33;color:var(--vio)}
+  .tag.sus{background:#2f1a12;color:var(--org)}
+  .muted{color:var(--tx2)}
+  /* тьмяний однорядковий замінник колишнього жовтого банера про ядра */
+  .corenote{color:var(--tx2);font-size:11.5px;margin:-2px 0 8px;opacity:.72;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:help}
+  .corenote:hover{opacity:1}
+  .up{color:var(--red)} .down{color:var(--acc)}
+  .cpucell{display:flex;align-items:center;gap:8px;justify-content:flex-end}
+  .cpucell .val{min-width:52px;text-align:right;font-variant-numeric:tabular-nums}
+  .cpubar-wrap{flex:1;height:8px;background:#20262f;border-radius:4px;overflow:hidden;max-width:150px}
+  .cpubar{height:100%;border-radius:4px;background:linear-gradient(90deg,#4ade80,#60a5fa)}
+  .cpubar.hot{background:linear-gradient(90deg,#fbbf24,#f87171)}
+  #live-panel tbody tr td:first-child{text-align:left}
+  /* смужка ядер: кожне ядро — окремий стовпчик, видно впирання в одне ядро */
+  #cores-strip{display:flex;gap:2px;align-items:flex-end;height:26px;margin:2px 0 10px;
+    padding:3px 4px;background:#12161d;border:1px solid var(--line);border-radius:8px}
+  .core{flex:1;min-width:3px;background:#232a37;border-radius:2px;position:relative;height:100%}
+  .core i{position:absolute;bottom:0;left:0;right:0;border-radius:2px;background:var(--acc);
+    display:block}
+  .core.warm i{background:var(--org)} .core.hotcore i{background:var(--red)}
+  .warnbox{display:flex;gap:9px;align-items:flex-start;padding:9px 11px;margin-bottom:10px;
+    border:1px solid #4a3520;background:#1d1a14;border-radius:9px;font-size:12.5px;color:#e8d5ac}
+  .warnbox b{color:#fbbf24}
+  .tag.cb{background:#3b2d12;color:var(--org)}
+
+  /* здоров'я: вибір інструмента */
+  .toolgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:12px}
+  .tool{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:16px;cursor:pointer;transition:.15s}
+  .tool:hover{border-color:var(--blue);transform:translateY(-1px)}
+  .tool .ic{font-size:24px;margin-bottom:8px}
+  .tool .tt{font-size:15px;font-weight:600;margin-bottom:5px}
+  .tool .td{font-size:12.5px;color:var(--tx2);line-height:1.5}
+  .tool .tstat{margin-top:11px;padding-top:10px;border-top:1px solid var(--line);
+    font-size:12.5px;color:var(--tx2)}
+  .tool .tstat b{color:var(--tx)}
+  .toolview{display:none}
+  .toolview.active{display:block}
+  #hub.hidden{display:none}
+  .toolbar{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+  .toolbar b{font-size:15px}
+  .toolbar .back{padding:5px 11px}
+  .sumline{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .sumline .pill{background:var(--chip);border:1px solid var(--line);border-radius:20px;
+    padding:4px 12px;font-size:12.5px}
+  .sumline .pill.bad{border-color:#4a2222;color:var(--red)}
+  .sumline .pill.warn{border-color:#453520;color:var(--org)}
+  .sumline .pill.ok{border-color:#23422e;color:var(--acc)}
+
+  /* здоров'я */
+  .hcard{border:1px solid var(--line);border-radius:10px;margin-bottom:9px;overflow:hidden}
+  .hhead{display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;
+    background:var(--panel2)}
+  .hhead:hover{background:#212734}
+  .hdot{width:9px;height:9px;border-radius:50%;flex:none}
+  /* Точку фарбує ЛИШЕ той статус, що стоїть на її власному рядку.
+     Раніше селектори були «.s-bad .hdot» — через пробіл вони чіпляли й усі
+     точки всередині секції. А що .s-bad оголошено після .s-ok, то в секції
+     зі статусом «погано» червоними ставали геть усі рядки, включно з ОК.
+     Саме тому всі диски світились червоним, хоч проблемний був один. */
+  .hitem.s-ok > .hdot,   .hcard.s-ok   > .hhead > .hdot{background:var(--acc)}
+  .hitem.s-warn > .hdot, .hcard.s-warn > .hhead > .hdot{background:var(--org)}
+  .hitem.s-bad > .hdot,  .hcard.s-bad  > .hhead > .hdot{background:var(--red)}
+  .hitem.s-info > .hdot, .hcard.s-info > .hhead > .hdot{background:var(--blue)}
+  .hitem.s-skip > .hdot, .hcard.s-skip > .hhead > .hdot{background:#4a5262}
+  .hhead .ht{font-weight:600;font-size:13.5px}
+  .hhead .hd{color:var(--tx2);font-size:12.5px;flex:1}
+  .hbody{padding:10px 12px;border-top:1px solid var(--line);display:none}
+  .hcard.open .hbody{display:block}
+  .hitem{display:flex;gap:9px;align-items:flex-start;padding:4px 0;font-size:12.5px}
+  .hitem .hdot{margin-top:5px}
+  .hitem b{font-weight:600}
+  .hfix{margin-top:10px;padding:9px 11px;border-radius:8px;background:#14202e;
+    border:1px solid #22344a;color:#bcd3ea;font-size:12.5px;white-space:pre-wrap}
+  .scorebig{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
+  .lat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:9px;
+    margin-bottom:12px}
+  .lat-cell{background:var(--panel2);border:1px solid var(--line);border-radius:9px;
+    padding:9px 11px}
+  .lat-cell .t{font-size:11px;color:var(--tx2);text-transform:uppercase}
+  .lat-cell .v{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums;margin-top:2px}
+  .verdict{padding:11px 13px;border-radius:9px;margin-bottom:12px;font-size:13.5px}
+  .verdict.good{background:#122419;border:1px solid #23422e;color:#a7e8bd}
+  .verdict.warn{background:#241d12;border:1px solid #453520;color:#e8d3a7}
+  .verdict.bad{background:#241414;border:1px solid #4a2222;color:#eeb4b4}
+  .verdict b{display:block;font-size:15px;margin-bottom:3px}
+
+  /* налаштування */
+  .cfg-sec{margin-bottom:14px}
+  .cfg-row{display:flex;align-items:center;gap:14px;padding:11px 0;
+    border-bottom:1px solid #1d222c}
+  .cfg-row:last-child{border-bottom:none}
+  .cfg-row .lbl{flex:1;min-width:0}
+  .cfg-row .lbl b{display:block;font-size:13.5px;font-weight:600}
+  .cfg-row .lbl span{display:block;color:var(--tx2);font-size:12.5px;margin-top:2px}
+  .cfg-row .ctl{flex:none}
+  .sw{position:relative;width:44px;height:24px;border-radius:12px;background:#2b3240;
+    cursor:pointer;transition:.18s;border:1px solid var(--line)}
+  .sw::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;
+    border-radius:50%;background:#8b94a7;transition:.18s}
+  .sw.on{background:#1d5b39;border-color:#2c7a4e}
+  .sw.on::after{left:22px;background:var(--acc)}
+  .sw.busy{opacity:.5;pointer-events:none}
+  input[type=number]{width:88px;background:var(--panel2);color:var(--tx);
+    border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-size:13px}
+  .needs-restart{background:#241d12;border:1px solid #453520;color:#e8d3a7;
+    border-radius:9px;padding:10px 13px;margin-bottom:12px;font-size:13px;
+    display:flex;align-items:center;gap:11px}
+
+  .detail{background:var(--panel2);border-bottom:1px solid var(--line)}
+  .detail td{white-space:normal;text-align:left;padding:14px}
+  .dgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:1000px){.dgrid{grid-template-columns:1fr}}
+  .dbox{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px}
+  .dbox h3{font-size:12px;color:var(--tx2);text-transform:uppercase;margin-bottom:8px}
+  .dbox .chartbox{height:150px}
+  .chips{display:flex;flex-wrap:wrap;gap:5px;max-height:130px;overflow:auto}
+  .chip{background:var(--chip);border:1px solid var(--line);border-radius:14px;
+    font-size:11.5px;padding:2px 9px;color:var(--tx2)}
+  .chip b{color:var(--tx);font-weight:600}
+  .minitable{max-height:180px;overflow:auto}
+  .minitable table{table-layout:fixed;width:100%}
+  .minitable td,.minitable th{padding:3px 6px;font-size:12px;cursor:default;
+    overflow:hidden;text-overflow:ellipsis}
+  /* розкриті подробиці процесу — без обрізання й без табличної ширини */
+  .minitable tr.pdet td{overflow:visible;text-overflow:clip;white-space:normal;
+    padding:0}
+  /* заголовок не має їхати вгору при прокрутці — інакше здається, що
+     колонки зміщені відносно даних */
+  .minitable thead th{position:sticky;top:0;background:var(--panel);z-index:2}
+  /* явні ширини: без них довгі значення розсовували колонки по-різному */
+  .minitable col.c-pid{width:15%} .minitable col.c-t{width:14%}
+  .minitable col.c-dur{width:19%} .minitable col.c-cpu{width:16%}
+  .minitable col.c-par{width:22%}
+  .dhead{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+  .dhead .path{font-size:12px;color:var(--tx2);word-break:break-all}
+  .reasons{margin:8px 0 0 0;padding:8px 10px;background:#211c12;border:1px solid #3a3020;
+    border-radius:8px;font-size:12.5px;color:#d9c9a0}
+
+  .events-list{max-height:340px;overflow:auto;font-size:12.5px}
+  .ev{display:flex;gap:10px;padding:4px 6px;border-bottom:1px solid #1a1f28}
+  .ev .t{color:var(--tx2);min-width:64px;font-variant-numeric:tabular-nums}
+  .ev .k{min-width:16px}
+  .ev .info{color:var(--tx2)}
+
+  /* картка програми */
+  #pmodal{position:fixed;inset:0;z-index:200;display:none;background:rgba(6,8,12,.72);
+    backdrop-filter:blur(3px);padding:28px 20px;overflow:auto}
+  #pmodal.open{display:block}
+  .pbox{max-width:1180px;margin:0 auto;background:var(--panel);border:1px solid var(--line);
+    border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.55);overflow:hidden}
+  .phead{display:flex;align-items:center;gap:10px;padding:14px 18px;
+    background:var(--panel2);border-bottom:1px solid var(--line)}
+  .phead .pname{font-size:17px;font-weight:600}
+  .phead .ppath{font-size:12px;color:var(--tx2);word-break:break-all;margin-top:2px}
+  .pbody{padding:16px 18px}
+  .psec{margin-bottom:18px}
+  .psec h3{font-size:12px;color:var(--tx2);text-transform:uppercase;letter-spacing:.4px;
+    margin-bottom:9px}
+  .pstats{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:9px}
+  .pstat{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:9px 11px}
+  .pstat .t{font-size:11px;color:var(--tx2);text-transform:uppercase}
+  .pstat .v{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums;margin-top:2px}
+  .pgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:900px){.pgrid{grid-template-columns:1fr}}
+  .kv{display:flex;gap:10px;padding:4px 0;font-size:12.5px;border-bottom:1px solid #1b202a}
+  .kv:last-child{border-bottom:none}
+  .kv .k{color:var(--tx2);min-width:150px}
+  .kv .v{flex:1;word-break:break-all}
+
+  /* автозапуск */
+  .arow{display:flex;align-items:center;gap:12px;padding:10px 12px;
+    border-bottom:1px solid #1d222c}
+  .arow:last-child{border-bottom:none}
+  .arow .ai{flex:1;min-width:0}
+  .arow .ai b{font-size:13.5px;display:block}
+  .arow .ai span{font-size:12px;color:var(--tx2);display:block;word-break:break-all;
+    margin-top:2px}
+  .arow.off{opacity:.55}
+  .badge-sm{font-size:10.5px;padding:1px 7px;border-radius:9px;background:var(--chip);
+    color:var(--tx2);white-space:nowrap}
+  .badge-sm.prot{background:#2a2118;color:var(--org)}
+  .badge-sm.ms{background:#152238;color:var(--blue)}
+
+  #toast{position:fixed;right:18px;bottom:18px;z-index:300;display:none;max-width:420px;
+    background:#1d2430;border:1px solid var(--blue);border-radius:12px;padding:13px 15px;
+    box-shadow:0 8px 30px rgba(0,0,0,.5);font-size:13px}
+  #toast .f{font-weight:600;word-break:break-all;margin:4px 0}
+  #toast .row{display:flex;gap:8px;margin-top:8px}
+  .empty{color:var(--tx2);text-align:center;padding:30px 10px;font-size:13.5px}
+  .foot{color:#525b6b;font-size:11.5px;text-align:center;padding:10px 0 20px}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="logo"><span class="dot" id="livedot"></span> PC Monitor</div>
+  <span class="badge" id="b-etw">ETW: …</span>
+  <span class="badge" id="b-db">БД: …</span>
+  <span class="badge" id="b-up">…</span>
+  <div class="spacer"></div>
+  <input type="text" id="search" placeholder="Пошук програми…" style="width:190px">
+  <select id="daysel"></select>
+  <button class="btn" id="live" title="Автооновлення кожні 15 с">⟳ Живе</button>
+</div>
+
+<nav class="tabs" id="tabs">
+  <button class="tab active" data-tab="now">⚡ Зараз</button>
+  <button class="tab" data-tab="day">📊 За день</button>
+  <button class="tab" data-tab="sec">⚠ Безпека <span class="tabbadge" id="tb-sec"></span></button>
+  <button class="tab" data-tab="ev">🕐 Події</button>
+  <button class="tab" data-tab="health">🩺 Здоров'я <span class="tabbadge" id="tb-health"></span></button>
+  <button class="tab" data-tab="auto">🚀 Автозапуск</button>
+  <span style="flex:1"></span>
+  <button class="tab" data-tab="cfg" title="Налаштування">⚙</button>
+</nav>
+
+<main>
+  <!-- ══════════ ВКЛАДКА: ЗАРАЗ ══════════ -->
+  <section class="pane active" data-pane="now">
+  <div class="cards" id="now-cards"></div>
+  <div class="tstrip" id="temps"></div>
+  <div id="temps-more"></div>
+
+  <div class="panel" id="live-panel">
+    <h2>⚡ Зараз (наживо) <span class="muted" id="live-sub" style="text-transform:none;letter-spacing:0;font-weight:400"></span>
+      <span style="flex:1"></span>
+      <button class="btn small" id="cpu-mode"
+        title="Перемкнути: відсоток від усього процесора ↔ скільки ядер з'їдено">CPU: %</button>
+      <button class="btn small" id="live-toggle" title="Пауза / продовжити живе оновлення">⏸ Пауза</button>
+    </h2>
+    <div id="cores-strip" title="Завантаження кожного ядра окремо"></div>
+    <div id="core-warn" style="display:none"></div>
+    <div id="live-note" class="muted" style="display:none;font-size:13px;padding:4px 2px"></div>
+    <div id="live-scroll" style="overflow:auto;max-height:460px">
+      <table id="live-table">
+        <thead><tr>
+          <th data-lk="name">Ім'я</th>
+          <th data-lk="cpu_pct" title="Відсоток від усього процесора">CPU</th>
+          <th data-lk="rss" title="Оперативна пам'ять">Пам'ять</th>
+          <th data-lk="disk_bps" title="Читання + запис на диск">Диск</th>
+          <th data-lk="net_bps" title="Вхідний + вихідний трафік">Мережа</th>
+          <th data-lk="gpu_pct" title="Завантаження відеокарти">GPU</th>
+          <th data-lk="nproc" title="Скільки процесів об'єднано під цим ім'ям">Проц.</th>
+        </tr></thead>
+        <tbody id="live-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Термінал: живе тут, а не в налаштуваннях — команди виконують, дивлячись
+       на живі показники. У налаштуваннях лишився тільки вимикач дозволу. -->
+  <div class="panel" id="term-panel">
+    <h2 style="cursor:pointer;user-select:none" onclick="toggleTerm()">⌨ Термінал
+      <span id="term-arrow">▸</span>
+      <span style="flex:1"></span>
+      <span class="muted" id="term-note"
+            style="text-transform:none;letter-spacing:0;font-weight:400"></span>
+    </h2>
+    <div id="term-body" style="display:none">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:9px">
+        <input id="cmd-input" placeholder="команда… (Enter — виконати, ↑/↓ — історія)"
+               autocomplete="off" spellcheck="false">
+        <button class="btn" id="cmd-run">Виконати</button>
+      </div>
+      <label style="display:flex;gap:7px;align-items:center;font-size:12.5px;
+                    color:var(--tx2);margin-bottom:10px;cursor:pointer">
+        <input type="checkbox" id="cmd-admin">
+        цього разу від адміністратора
+        <span class="muted">— знадобиться для sfc, dism, netsh</span>
+      </label>
+      <div class="term" id="cmd-out"><span class="meta" id="cmd-hint">Вивід з'явиться тут. Команди
+        виконуються через cmd від звичайного користувача. Небезпечні операції
+        (формат диска, diskpart, видалення точок відновлення) монітор не виконує.</span></div>
+    </div>
+    <div id="term-off" style="display:none;font-size:13px" class="muted">
+      Виконання команд вимкнено (безпечне налаштування за замовчуванням).
+      Увімкнути можна в
+      <a href="#" onclick="setTab('cfg');return false" style="color:var(--blue)">Налаштуваннях</a> —
+      розділ «Командний рядок».
+    </div>
+  </div>
+
+  </section>
+
+  <!-- ══════════ ВКЛАДКА: ЗА ДЕНЬ ══════════ -->
+  <section class="pane" data-pane="day">
+  <div class="cards" id="cards"></div>
+
+  <div class="charts">
+    <div class="panel"><h2>Процесор і пам'ять</h2>
+      <div class="chartbox"><canvas id="ch-sys"></canvas></div></div>
+    <div class="panel"><h2>Мережа (весь ПК)</h2>
+      <div class="chartbox"><canvas id="ch-net"></canvas></div></div>
+  </div>
+
+  <div class="panel">
+    <h2>Програми за день <span class="muted" id="apps-count"></span></h2>
+    <div style="overflow-x:auto">
+    <table id="apps-table">
+      <thead><tr>
+        <th data-k="name">Програма</th>
+        <th data-k="nmin" title="Скільки хвилин програма справді щось робила — це звичайний час на годиннику">У роботі</th>
+        <th data-k="cpu_core_s" title="Скільки процесорного часу з'їдено СУМАРНО по всіх ядрах. Гра, що дві години вантажила 6 ядер, дає 12 ядро-годин — це не означає, що ви грали 12 годин.">Ядро-год</th>
+        <th data-k="cpu_pct_max">Пік CPU</th>
+        <th data-k="cores_max" title="Скільки ядер програма з'їдала в піку. 1.00 і більше — вона впиралася в ядро">Ядер пік</th>
+        <th data-k="rss_max">RAM макс</th>
+        <th data-k="read_b">Диск чит.</th>
+        <th data-k="write_b">Диск зап.</th>
+        <th data-k="sent_b">↑ Відпр.</th>
+        <th data-k="recv_b">↓ Отрим.</th>
+        <th data-k="pub_ips">IP</th>
+        <th data-k="dns_count">Домени</th>
+        <th data-k="ninst">Запусків</th>
+        <th data-k="suspicion_score">Бали</th>
+        <th></th>
+      </tr></thead>
+      <tbody id="apps-body"></tbody>
+    </table>
+    </div>
+    <div class="empty" id="apps-empty" style="display:none"></div>
+  </div>
+  </section>
+
+  <!-- ══════════ ВКЛАДКА: БЕЗПЕКА ══════════ -->
+  <section class="pane" data-pane="sec">
+    <div class="panel susp" id="susp-panel" style="display:none">
+      <h2>⚠ Зверни увагу</h2>
+      <div id="susp-list"></div>
+    </div>
+    <div class="panel" id="sec-clean" style="display:none">
+      <div class="empty">✓ Нічого підозрілого за цей день.<br>
+        <span style="font-size:12.5px">Монітор дивиться на маскування під системні процеси,
+        запуск із тимчасових папок, аномальний трафік, нічну активність і ще кілька ознак.</span>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Нові програми за день <span class="muted" id="new-count"></span></h2>
+      <div class="muted" style="font-size:12.5px;margin-bottom:9px">
+        Виконувані файли, які монітор побачив уперше. Перший день після
+        встановлення тут буде багато — це нормально, він знайомиться з системою.
+      </div>
+      <div id="new-list"></div>
+    </div>
+  </section>
+
+  <!-- ══════════ ВКЛАДКА: ПОДІЇ ══════════ -->
+  <section class="pane" data-pane="ev">
+  <div class="panel">
+    <h2>Стрічка подій
+      <select id="ev-filter" style="font-size:12px;padding:3px 8px">
+        <option value="">усі</option>
+        <option value="process_start">запуски</option>
+        <option value="process_stop">завершення</option>
+        <option value="monitor_start">монітор</option>
+      </select>
+      <span class="muted" id="ev-count"></span>
+    </h2>
+    <div class="events-list" id="events" style="max-height:none"></div>
+  </div>
+  </section>
+
+  <!-- ══════════ ВКЛАДКА: ЗДОРОВ'Я ══════════ -->
+  <section class="pane" data-pane="health">
+
+    <!-- вибір інструмента -->
+    <div id="hub">
+      <div class="panel" id="hub-summary" style="display:none"></div>
+      <div class="toolgrid">
+        <div class="tool" data-tool="scan">
+          <div class="ic">🩺</div>
+          <div class="tt">Перевірка системи</div>
+          <div class="td">Диски, драйвери, телеметрія, автозапуск, оновлення,
+            захист, помилки в журналі. Дає оцінку стану й пояснює кожну знахідку.</div>
+          <div class="tstat" id="st-scan">не перевірялось</div>
+        </div>
+        <div class="tool" data-tool="lat">
+          <div class="ic">⏱</div>
+          <div class="tt">Затримки системи</div>
+          <div class="td">Чому клацає звук, підвисає мишка й «стрибає» гра.
+            Показує, драйвер це чи конкретна програма.</div>
+          <div class="tstat" id="st-lat">не вимірювалось</div>
+        </div>
+        <div class="tool" data-tool="clip">
+          <div class="ic">📋</div>
+          <div class="tt">Буфер обміну</div>
+          <div class="td">Чому гальмує копіювання картинок. Показує, хто тримає
+            буфер і які програми за ним стежать.</div>
+          <div class="tstat" id="st-clip">не перевірялось</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── інструмент: перевірка системи ── -->
+    <div class="toolview" id="tool-scan">
+      <div class="toolbar">
+        <button class="btn back">← Усі перевірки</button>
+        <b>🩺 Перевірка системи</b>
+        <span style="flex:1"></span>
+        <span id="h-score"></span>
+      </div>
+      <div class="panel">
+        <div class="muted" style="font-size:13px;margin-bottom:12px">
+          Усі перевірки <b>лише читають</b> — нічого не вимикається, не чиститься
+          й не «оптимізується». Рішення завжди за тобою.
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn" id="h-quick">⚡ Швидка <span class="muted">~1 хв</span></button>
+          <button class="btn" id="h-full">🔍 Повна <span class="muted">~3 хв</span></button>
+          <button class="btn" id="h-deep">🔬 Глибока <span class="muted">+ цілісність Windows, до 20 хв</span></button>
+        </div>
+        <div id="h-progress" style="display:none;margin-top:12px">
+          <div class="cpubar-wrap" style="max-width:none;height:6px"><div class="cpubar" id="h-bar" style="width:0%"></div></div>
+          <div class="muted" style="font-size:12.5px;margin-top:6px" id="h-cur"></div>
+        </div>
+      </div>
+      <div id="h-results"></div>
+    </div>
+
+    <!-- ── інструмент: затримки ── -->
+    <div class="toolview" id="tool-lat">
+      <div class="toolbar">
+        <button class="btn back">← Усі перевірки</button>
+        <b>⏱ Затримки системи</b>
+      </div>
+      <div class="panel">
+        <div class="muted" style="font-size:13px;margin-bottom:12px">
+          Потік із високим пріоритетом просить розбудити його рівно через 1 мс і
+          засікає, наскільки Windows запізнилась. Паралельно знімаються зрізи
+          системи, щоб зіставити затримки з тим, що саме в ці моменти відбувалось —
+          і сказати, <b>драйвер це чи програма</b>.
+          <br><span style="font-size:12.5px">Міряй тоді, коли проблема відчувається.
+          Довший замір ловить рідкісні шпички краще.</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn" id="l-start">▶ Заміряти</button>
+          <select id="l-sec">
+            <option value="15">15 секунд</option>
+            <option value="30" selected>30 секунд</option>
+            <option value="60">1 хвилина</option>
+            <option value="180">3 хвилини</option>
+          </select>
+          <button class="btn" id="l-stop" style="display:none">⏹ Зупинити</button>
+          <span class="muted" id="l-state"></span>
+        </div>
+        <div id="l-progress" style="display:none;margin-top:10px">
+          <div class="cpubar-wrap" style="max-width:none;height:6px"><div class="cpubar" id="l-bar" style="width:0%"></div></div>
+        </div>
+      </div>
+      <div id="l-result"></div>
+
+      <div class="panel" style="margin-top:14px">
+        <h2>🔬 Назвати драйвер поіменно</h2>
+        <div class="muted" style="font-size:13px;margin-bottom:12px">
+          Якщо замір вище показав, що винні драйвери — цей крок скаже, <b>який
+          саме файл</b> (умовно <code>nvlddmkm.sys</code>). Windows коротко записує
+          події ядра власними засобами, а монітор зіставляє адреси процедур зі
+          списком завантажених драйверів.
+          <br><span style="font-size:12.5px">Без встановлення драйверів, без
+          вимкнення Secure Boot і без конфліктів з анти-чітами. Потрібні лише
+          права адміністратора.</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn" id="d-test" title="Швидко перевірити, чи працює трасування на цій машині">✓ Перевірити можливості</button>
+          <button class="btn" id="d-start">🔬 Знайти драйвер</button>
+          <select id="d-sec">
+            <option value="10">10 секунд</option>
+            <option value="15" selected>15 секунд</option>
+            <option value="30">30 секунд</option>
+          </select>
+          <button class="btn" id="d-cancel" style="display:none">⏹ Скасувати</button>
+          <span class="muted" id="d-state"></span>
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:8px">
+          Почни з «Перевірити можливості» — це кілька секунд і одразу скаже,
+          чи спрацює трасування, замість того щоб чекати марно.
+        </div>
+        <div id="d-progress" style="display:none;margin-top:10px">
+          <div class="cpubar-wrap" style="max-width:none;height:6px"><div class="cpubar" id="d-bar" style="width:0%"></div></div>
+          <div class="muted" style="font-size:12.5px;margin-top:6px" id="d-stage"></div>
+        </div>
+        <!-- окремий блок для перевірки можливостей: інакше фонове
+             оновлення затирало результат за секунду -->
+        <div id="d-test-result" style="margin-top:12px"></div>
+        <div id="d-result" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+    <!-- ── інструмент: буфер обміну ── -->
+    <div class="toolview" id="tool-clip">
+      <div class="toolbar">
+        <button class="btn back">← Усі перевірки</button>
+        <b>📋 Буфер обміну</b>
+      </div>
+      <div class="panel">
+        <div class="muted" style="font-size:13px;margin-bottom:12px">
+          Буфер обміну один на всю систему. Кожну зміну Windows розсилає <b>всім</b>,
+          хто підписався, і кожен читає вміст собі. З текстом непомітно, а знімок
+          екрана — це десятки мегабайтів, які копіюються стільки разів, скільки
+          таких програм.
+          <br><span style="font-size:12.5px">Найкорисніше — натиснути
+          <b>саме тоді, коли гальмує</b>: тоді видно, хто тримає буфер.</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn" id="c-check">📋 Перевірити буфер</button>
+          <label class="muted" style="font-size:12.5px;display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="checkbox" id="c-sizes"> виміряти розмір даних
+          </label>
+          <span class="muted" id="c-state"></span>
+        </div>
+        <div class="muted" style="font-size:12px;margin-top:8px">
+          Розмір даних за замовчуванням <b>не</b> вимірюється: щоб його дізнатися,
+          треба змусити програму-джерело віддати вміст просто зараз — а якщо вона
+          гальмує, підвисає буфер усієї системи. Вмикай, лише коли справді потрібно.
+        </div>
+      </div>
+      <div id="c-result"></div>
+    </div>
+
+  </section>
+
+  <!-- ══════════ ВКЛАДКА: АВТОЗАПУСК ══════════ -->
+  <section class="pane" data-pane="auto">
+    <div class="panel">
+      <h2>🚀 Що стартує разом із Windows</h2>
+      <div class="muted" style="font-size:13px;margin-bottom:12px">
+        Записи не видаляються — лише вимикаються тим самим штатним механізмом,
+        яким користується Диспетчер задач. Увімкнути назад можна будь-коли одним
+        кліком. Критичні служби Windows захищені й не змінюються взагалі.
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn" id="a-reload">⟳ Оновити список</button>
+        <button class="btn" id="a-services">Показати служби</button>
+        <span class="muted" id="a-state"></span>
+      </div>
+    </div>
+    <div id="a-apps"></div>
+    <div id="a-svc"></div>
+  </section>
+
+  <!-- ══════════ ВКЛАДКА: НАЛАШТУВАННЯ ══════════ -->
+  <section class="pane" data-pane="cfg">
+    <div id="cfg-body"></div>
+  </section>
+
+  <div class="foot" id="foot"></div>
+</main>
+
+<div id="toast"></div>
+
+<!-- контекстне меню процесів: правий клік по рядку в «Зараз» -->
+<div id="ctx"></div>
+
+<!-- картка програми: відкривається кліком по рядку з будь-якої вкладки -->
+<div id="pmodal" onclick="if(event.target===this)closeProc()">
+  <div class="pbox">
+    <div class="phead">
+      <div style="flex:1;min-width:0">
+        <div class="pname" id="pm-name"></div>
+        <div class="ppath" id="pm-path"></div>
+      </div>
+      <button class="btn small" id="pm-watch">👁</button>
+      <button class="btn small" id="pm-export">📤 Лог для Claude</button>
+      <button class="btn small" onclick="closeProc()">✕</button>
+    </div>
+    <div class="pbody" id="pm-body"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $=s=>document.querySelector(s);
+const state={date:null,days:[],apps:[],overview:null,status:null,sort:{k:"cpu_core_s",dir:-1},
+  search:"",live:true,liveOn:true,open:null,charts:{},detailCharts:[],events:[],evFilter:"",
+  hist:[]};   // короткий ряд живих замірів для «сер./пік» у картках
+function today(){ return new Date().toISOString().slice(0,10); }
+// українські форми: 1 ядро, 2 ядра, 5 ядер, 11 ядер, 22 ядра
+function plural(n,one,few,many){
+  const a=Math.abs(n)%100, b=a%10;
+  if(a>10&&a<20) return many;
+  if(b>1&&b<5) return few;
+  return b===1?one:many;
+}
+// початок вибраного дня в секундах (за місцевим часом)
+function dayStart(){ const p=(state.date||today()).split("-");
+  return new Date(+p[0],+p[1]-1,+p[2]).getTime()/1000; }
+
+/* ---------- формат ---------- */
+function fb(n){ if(n==null) return "—"; n=+n;
+  if(n<1024) return n+" Б";
+  const u=["КіБ","МіБ","ГіБ","ТіБ"]; let i=-1;
+  do{ n/=1024; i++; }while(n>=1024 && i<u.length-1);
+  return n.toFixed(n>=100?0:n>=10?1:2)+" "+u[i]; }
+function fdur(s){ if(s==null) return "—"; s=Math.round(s);
+  if(s<60) return s+" с";
+  const h=Math.floor(s/3600), m=Math.floor(s%3600/60);
+  if(h) return h+" год "+String(m).padStart(2,"0")+" хв";
+  return m+" хв "+String(s%60).padStart(2,"0")+" с"; }
+/* Процесорний час — це СУМА по всіх ядрах, а не час на годиннику.
+   Гра, що дві години вантажила шість ядер, дає дванадцять ядро-годин.
+   Раніше ця колонка називалась «CPU-час» і читалась як «скільки грав» —
+   тому одиниця тепер написана прямо в значенні, її неможливо не помітити. */
+function fcore(s){
+  if(s==null) return "—";
+  if(s < 60) return Math.round(s)+" ядро-с";
+  if(s < 3600) return (s/60).toFixed(s<600?1:0)+" ядро-хв";
+  return (s/3600).toFixed(s<36000?1:0)+" ядро-год";
+}
+// час на годиннику: скільки хвилин програма справді щось робила
+function fmin(m){
+  if(!m) return "—";
+  if(m < 60) return m+" хв";
+  return Math.floor(m/60)+" год "+String(m%60).padStart(2,"0")+" хв";
+}
+function coreHint(a){
+  if(!a.cpu_core_s) return "";
+  const h=(a.cpu_core_s/3600);
+  if(!a.nmin) return `${h.toFixed(1)} ядро-годин процесорного часу`;
+  const par=a.cpu_core_s/(a.nmin*60);
+  return `${h.toFixed(1)} ядро-год за ${a.nmin} хв роботи — `
+       + `у середньому ${par.toFixed(1)} ядер одночасно`;
+}
+function ft(ts){ if(!ts) return "—"; const d=new Date(ts*1000);
+  return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0"); }
+function fts(ts){ if(!ts) return "—"; const d=new Date(ts*1000);
+  return ft(ts)+":"+String(d.getSeconds()).padStart(2,"0"); }
+function esc(s){ return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+// Токен сесії, підставлений монітором у цю сторінку. Додається до КОЖНОГО
+// запиту централізовано тут, щоб жодна дія не лишилась без підпису.
+const TOKEN=(document.querySelector('meta[name="pcmon-token"]')||{}).content||"";
+async function api(p,opt){
+  opt=opt||{};
+  opt.headers=Object.assign({"X-PCMon-Token":TOKEN}, opt.headers||{});
+  const r=await fetch(p,opt);
+  if(!r.ok){
+    let t=await r.text();
+    try{ t=JSON.parse(t).error||t; }catch(e){}
+    throw new Error(t);
+  }
+  return r.json();
+}
+function toast(html,ms=7000){ const t=$("#toast"); t.innerHTML=html; t.style.display="block";
+  clearTimeout(t._h); t._h=setTimeout(()=>t.style.display="none",ms); }
+
+/* ═══════════ ЗАХИСТ ВІД «З'ЯВИЛОСЬ І ПРОПАЛО» ═══════════
+   Симптом трапляється щоразу, коли фонове оновлення перемальовує контейнер,
+   усередині якого лежить те, що людина щойно викликала: результат перевірки,
+   розгорнутий розділ, набраний текст. Причина завжди одна з трьох, тому й
+   ліки три — і застосовуються скрізь, а не в окремому місці.
+
+   1. dom(id).innerHTML — не чіпати DOM, якщо розмітка не змінилась. Саме це
+      прибирає більшість випадків: періодичне оновлення, яке щоразу малює те
+      саме, більше нічого не руйнує.
+   2. stick — результати одноразових дій живуть у стані, а не лише в DOM,
+      і повертаються на місце після кожного перемальовування контейнера.
+   3. keepField — введений текст і галочки переживають перемальовування. */
+// dom("id").innerHTML = ... — виглядає як звичайне присвоєння, але мовчки
+// пропускає запис, якщо розмітка та сама. Форма навмисно збігається зі
+// звичайною, щоб перевести на неї місця без ризику зламати вирази.
+function hToggle(head, key){
+  const card = head.parentNode;
+  card.classList.toggle("open");
+  state.hOpen = state.hOpen || {};
+  state.hOpen[key] = card.classList.contains("open");
+  // розмітка більше не збігається зі збереженою — інакше dom() вирішить,
+  // що нічого не змінилось, і наступне оновлення поверне старий стан
+  const box = $("#h-results"); if(box) box.__last = null;
+}
+window.hToggle = hToggle;
+
+function dom(id){
+  return {
+    set innerHTML(v){
+      const el = $("#"+id);
+      if(!el || el.__last === v) return;      // нічого не змінилось — не чіпаємо
+      el.innerHTML = v; el.__last = v;
+    },
+    get innerHTML(){ const el = $("#"+id); return el ? el.innerHTML : ""; },
+  };
+}
+function stick(id, html){
+  state.sticky = state.sticky || {};
+  state.sticky[id] = html;
+  const el = $("#"+id); if(el){ el.innerHTML = html; el.__last = html; }
+}
+function unstick(id){
+  if(state.sticky) delete state.sticky[id];
+  const el = $("#"+id); if(el){ el.innerHTML = ""; el.__last = ""; }
+}
+function restoreSticky(){
+  for(const id in (state.sticky||{})){
+    const el = $("#"+id);
+    if(el && el.innerHTML !== state.sticky[id]){
+      el.innerHTML = state.sticky[id]; el.__last = state.sticky[id];
+    }
+  }
+}
+// відновити значення поля/галочки після перемальовування
+function keepField(id, key, prop){
+  const el = $("#"+id); if(!el) return;
+  prop = prop || "value";
+  state.fields = state.fields || {};
+  if(state.fields[key] !== undefined) el[prop] = state.fields[key];
+  const save = () => { state.fields[key] = el[prop]; };
+  el.addEventListener("input", save);
+  el.addEventListener("change", save);
+}
+
+/* ---------- графіки ---------- */
+const HAS_CHART=(typeof Chart!=="undefined");
+if(HAS_CHART){ Chart.defaults.color="#8b94a7"; Chart.defaults.borderColor="#262c38";
+  Chart.defaults.font.family='"Segoe UI",system-ui,sans-serif'; }
+function mkLine(ctx,datasets,labels,opts={}){
+  if(!HAS_CHART||!ctx) return null;
+  return new Chart(ctx,{type:"line",
+    data:{labels,datasets},
+    options:Object.assign({
+      responsive:true,maintainAspectRatio:false,animation:false,
+      interaction:{mode:"index",intersect:false},
+      plugins:{legend:{labels:{boxWidth:12,boxHeight:3}},
+        tooltip:{callbacks:opts.tooltip||{}}},
+      elements:{point:{radius:0,hitRadius:6},line:{borderWidth:1.6,tension:.25}},
+      scales:opts.scales||{}},opts.extra||{})});
+}
+function killChart(id){ try{ if(state.charts[id]) state.charts[id].destroy(); }catch(e){}
+  delete state.charts[id]; }
+
+/* ---------- завантаження ---------- */
+async function loadDays(){
+  const d=await api("/api/days"); state.days=d.days;
+  const sel=$("#daysel"); sel.innerHTML="";
+  const today=new Date().toISOString().slice(0,10);
+  for(const day of d.days){
+    const o=document.createElement("option"); o.value=day;
+    o.textContent=day===today?day+" (сьогодні)":day; sel.appendChild(o);
+  }
+  if(!state.date) state.date=d.days[0]||today;
+  sel.value=state.date;
+}
+async function loadStatus(){
+  // Власний ліміт: якщо сервер зайнятий (наприклад, чекає на заблокований
+  // буфер обміну), запит має впасти швидко, а не тримати чергу.
+  try{
+    const ctl=new AbortController(); const to=setTimeout(()=>ctl.abort(),4000);
+    const r=await fetch("/api/status",{signal:ctl.signal}); clearTimeout(to);
+    if(!r.ok) throw new Error(r.status); state.status=await r.json();
+    state.statusMiss=0;
+  }catch(e){ state.status=null; state.statusMiss=(state.statusMiss||0)+1; }
+  const s=state.status, be=$("#b-etw"), bd=$("#b-db"), bu=$("#b-up");
+  if(!s){
+    // Не відповів — питаємо «хто саме зайняв». /api/ping навмисно не чіпає
+    // ані базу, ані блокування, тож проходить навіть коли решта стоїть.
+    let p=null;
+    try{
+      const c=new AbortController(); const t=setTimeout(()=>c.abort(),2500);
+      const r=await fetch("/api/ping",{signal:c.signal}); clearTimeout(t);
+      if(r.ok) p=await r.json();
+    }catch(_){}
+    const dead=!p;                        // навіть ping не пройшов — це вже погано
+    const jobs=(p&&p.busy)||[];
+    be.className="badge warn";
+    $("#livedot").style.background=(dead||state.statusMiss>2)?"#f87171":"#fbbf24";
+    if(jobs.length){
+      const j=jobs[0];
+      be.textContent=`зайнятий: ${j.what} · ${j.seconds}с`;
+      be.title=jobs.map(x=>`${x.what}${x.detail?" ("+x.detail+")":""} — ${x.seconds} с`)
+                   .join("\n")+(jobs.length>1?`\n\nусього завдань: ${jobs.length}`:"");
+    } else if(p){
+      const age=p.sampler_age;
+      be.textContent = p.sampler_doing ? `збирач: ${p.sampler_doing}`
+        : (age!=null&&age>30 ? `збирач мовчить ${Math.round(age)}с` : "збирач зайнятий…");
+      be.title="Монітор відповідає, але не встиг з відповіддю про стан."
+        +(age!=null?`\nОстанній повний цикл: ${Math.round(age)} с тому.`:"");
+    } else {
+      be.textContent = state.statusMiss>2?"збирач не відповідає":"збирач зайнятий…";
+      be.title="Монітор не відповідає навіть на найпростіший запит. "
+        +"Подивись logs/monitor.log.";
+    }
+    return; }
+  $("#livedot").style.background="#4ade80";
+  const et=s.etw||"—";
+  be.textContent="ETW: "+(et==="активний"||et.startsWith("активний")?"точні байти ✓":et);
+  be.className="badge "+(et.startsWith("активний")?"ok":"warn");
+  be.title="Стан збору точних байтів мережі та DNS. "+et;
+  bd.textContent="БД: "+fb(s.db_size);
+  bu.textContent="працює "+fdur(s.uptime_s);
+  state.cmdAllowed=!!s.commands;
+  updateTermUI();
+}
+async function loadOverview(){
+  const o=await api("/api/overview?date="+state.date); state.overview=o;
+  const t=o.totals||{};
+  const cards=[
+    {t:"CPU середнє / пік",v:(t.cpu_avg!=null?t.cpu_avg.toFixed(1):"—")+"% / "+(t.cpu_max!=null?t.cpu_max.toFixed(0):"—")+"%",
+     s:o.now?("зараз: "+o.now.cpu.toFixed(0)+"%"):""},
+    {t:"RAM пік",v:fb(t.ram_max),s:"з "+fb(t.ram_total)+(o.now?(" · зараз "+fb(o.now.ram_used)):"")},
+    {t:"Мережа за день",v:"↑ "+fb(t.sent)+"  ↓ "+fb(t.recv),s:"весь ПК"},
+    {t:"Диск за день",v:"чит. "+fb(t.rd),s:"зап. "+fb(t.wr)},
+    {t:"Програм активних",v:o.apps_active??"—",s:"запусків процесів: "+(o.starts??0)+
+      (o.new_exes?(" · нових exe: "+o.new_exes):"")},
+    {t:"Підозрілих",v:o.suspicious.length,s:o.suspicious.length?"дивись «Зверни увагу»":"усе тихо",
+     alert:o.suspicious.length>0},
+  ];
+  dom("cards").innerHTML=cards.map(c=>`<div class="card${c.alert?" alert":""}">
+    <div class="t">${c.t}</div><div class="v">${c.v}</div><div class="s">${c.s||""}</div></div>`).join("");
+
+  const L=o.series.map(r=>ft(r.minute_ts));
+  killChart("sys");
+  state.charts.sys=mkLine($("#ch-sys"),[
+    {label:"CPU %",data:o.series.map(r=>r.cpu_avg),borderColor:"#60a5fa",yAxisID:"y"},
+    {label:"RAM ГіБ",data:o.series.map(r=>r.ram_used/2**30),borderColor:"#a78bfa",yAxisID:"y1"},
+  ],L,{scales:{y:{min:0,max:100,ticks:{callback:v=>v+"%"}},
+       y1:{position:"right",min:0,grid:{display:false},ticks:{callback:v=>v.toFixed(1)+"Г"}},
+       x:{ticks:{maxTicksLimit:10}}}});
+  killChart("net");
+  state.charts.net=mkLine($("#ch-net"),[
+    {label:"↑ надіслано",data:o.series.map(r=>r.sent_b/1048576),borderColor:"#f87171",fill:true,
+     backgroundColor:"rgba(248,113,113,.08)"},
+    {label:"↓ отримано",data:o.series.map(r=>r.recv_b/1048576),borderColor:"#4ade80",fill:true,
+     backgroundColor:"rgba(74,222,128,.08)"},
+  ],L,{scales:{y:{min:0,ticks:{callback:v=>v+" МБ"}},x:{ticks:{maxTicksLimit:10}}},
+      tooltip:{label:c=>c.dataset.label+": "+c.parsed.y.toFixed(2)+" МіБ/хв"}});
+}
+async function loadApps(){
+  const d=await api("/api/apps?date="+state.date);
+  state.apps=d.apps; renderApps(); renderSusp();
+  $("#foot").textContent="PC Monitor · дані в data/pcmon.sqlite3 · експорти в exports/ · "+
+    (d.minutes_available?"похвилинна деталізація доступна":"старий день: лише денні підсумки");
+}
+async function loadEvents(){
+  const d=await api("/api/events?date="+state.date); state.events=d.events; renderEvents();
+}
+
+/* ---------- жива панель «Зараз» (як Диспетчер задач) ---------- */
+state.liveSort={k:"cpu_pct",dir:-1};
+state.cpuMode="pct";   // "pct" — % від усього CPU, "cores" — скільки ядер
+$("#cpu-mode").onclick=()=>{
+  state.cpuMode = state.cpuMode==="pct" ? "cores" : "pct";
+  $("#cpu-mode").textContent = state.cpuMode==="pct" ? "CPU: %" : "CPU: ядра";
+  $("#cpu-mode").classList.toggle("active", state.cpuMode==="cores");
+  // сортувати за тим, що показуємо
+  if(state.liveSort.k==="cpu_pct"||state.liveSort.k==="cores")
+    state.liveSort.k = state.cpuMode==="cores" ? "cores" : "cpu_pct";
+  document.querySelector('#live-table th[data-lk="cpu_pct"]').textContent =
+    state.cpuMode==="cores" ? "Ядра" : "CPU";
+  renderLive();
+};
+function rate(bps){ // швидкість -> рядок
+  if(!bps) return "";
+  if(bps<1024) return bps+" Б/с";
+  if(bps<1048576) return (bps/1024).toFixed(bps<102400?1:0)+" КБ/с";
+  return (bps/1048576).toFixed(1)+" МБ/с";
+}
+// підсвітка комірки залежно від «гарячості», як робить Диспетчер задач
+function heat(v,max){ if(!v) return "";
+  const t=Math.min(1,v/max);
+  if(t<0.02) return "";
+  return ` style="background:rgba(96,165,250,${(0.06+t*0.30).toFixed(3)})"`;
+}
+async function loadLive(){
+  if(!state.liveOn) return;
+  let d; try{ d=await api("/api/live"); }catch(e){ return; }
+  state.liveData=d;
+  renderLive();
+}
+function renderLive(){
+  const d=state.liveData; if(!d) return;
+  const note=$("#live-note"), body=$("#live-body");
+  if(!d.ts){ note.style.display="block";
+    note.textContent="Збирач щойно стартував — перший знімок за кілька секунд."; return; }
+  // --- смужка ядер + попередження про впирання в одне ядро ---------------
+  const strip=$("#cores-strip"), warn=$("#core-warn");
+  if(d.per_core&&d.per_core.length){
+    strip.style.display="flex";
+    strip.innerHTML=d.per_core.map((c,i)=>{
+      const cls=c>=90?" hotcore":c>=60?" warm":"";
+      return `<div class="core${cls}" title="Ядро ${i}: ${c}%"><i style="height:${Math.max(2,c)}%"></i></div>`;
+    }).join("");
+  } else strip.style.display="none";
+  // хто саме впирається в ядро
+  // Раніше тут був великий жовтий банер. Він з'являвся щоразу, коли якась
+  // програма впиралась в одне ядро (тобто майже завжди), і перекривав таблицю.
+  // Тепер це один тьмяний рядок; подробиці — у підказці при наведенні, а сам
+  // факт і так видно бейджем «1 ядро» біля назви програми в таблиці.
+  const bound=d.apps.filter(a=>a.core_bound).sort((a,b)=>b.cores1-a.cores1);
+  if(bound.length && d.cpu_total<60){
+    const tip=`Загальні ${d.cpu_total}% оманливі: ці програми повністю зайняли по ядру `
+      +`і далі не прискоряться, скільки б вільних ядер не було. `
+      +`${d.ncpu} ядер, найзавантаженіше на ${d.core_max}%.`;
+    warn.style.display="block";
+    warn.innerHTML=`<div class="corenote" title="${esc(tip)}">впираються в одне ядро: `
+      +bound.slice(0,4).map(a=>`${esc(a.name)} (${a.cores1.toFixed(2)})`).join(", ")
+      +(bound.length>4?` +${bound.length-4}`:"")+`</div>`;
+  } else warn.style.display="none";
+
+  // ── картки «зараз» ────────────────────────────────────────────────────
+  // Домовленість, однакова для всіх шести: ВЕЛИКЕ число — це завжди «прямо
+  // зараз», а дрібний рядок під ним — з чого це число, плюс середнє і пік за
+  // останні 10 хвилин. Раніше під половиною карток стояло «усі програми», з
+  // чого не було видно ні масштабу, ні того, багато це чи мало.
+  const busy=d.apps.filter(a=>a.cpu_pct>=0.1).length;
+  const netNow=d.apps.reduce((s,a)=>s+(a.net_bps||0),0);
+  const diskNow=d.apps.reduce((s,a)=>s+(a.disk_bps||0),0);
+  const gpuNow=Math.max(0,...d.apps.map(a=>a.gpu_pct||0));
+
+  const H=state.hist||(state.hist=[]);
+  H.push({ts:d.ts, cpu:d.cpu_total, core:d.core_max||0, ram:d.ram_used,
+          disk:diskNow, net:netNow, gpu:gpuNow, busy});
+  const WIN=600;                                   // вікно усереднення, секунд
+  while(H.length>2 && d.ts-H[0].ts>WIN) H.shift();
+  const enough=H.length>=4;                        // менше — середнє ще брехливе
+  const avg=k=>H.reduce((s,r)=>s+(r[k]||0),0)/H.length;
+  const peak=k=>Math.max(...H.map(r=>r[k]||0));
+  const span=()=>{ const t=Math.round((d.ts-H[0].ts)/60);
+    return t>=1?`за ${t} хв`:"за останню хвилину"; };
+  // «сер. X · пік Y» — або нічого, поки замало вимірів
+  const ap=(k,fmt)=>enough?`сер. ${fmt(avg(k))} · пік ${fmt(peak(k))}`:"збираю статистику…";
+  const pct=v=>v.toFixed(v<10?1:0)+"%";
+
+  dom("now-cards").innerHTML=[
+    {t:"Процесор", v:d.cpu_total+"%",
+     s:`${ap("cpu",pct)} · ${d.ncpu} ${plural(d.ncpu,"ядро","ядра","ядер")}`,
+     tip:`Зайнято зараз ${d.cpu_total}% усього процесора. Найзавантаженіше ядро — `
+        +`${d.core_max||0}%. Середнє і пік — ${span()}.`,
+     alert:(d.core_max||0)>=95},
+    {t:"Пам'ять", v:fb(d.ram_used),
+     s:`з ${fb(d.ram_total)} (${Math.round(d.ram_used/d.ram_total*100)}%)`
+       +(enough?` · пік ${fb(peak("ram"))}`:""),
+     tip:`Зайнято зараз ${fb(d.ram_used)} із ${fb(d.ram_total)}. Пік — ${span()}.`},
+    {t:"Диск", v:rate(diskNow)||"0 Б/с", s:ap("disk",v=>rate(v)||"0 Б/с"),
+     tip:`Сумарна швидкість читання й запису всіх програм. Середнє і пік — ${span()}.`},
+    {t:"Мережа", v:rate(netNow)||"0 Б/с",
+     s:d.etw_ok===false?"неточно: немає прав адміністратора":ap("net",v=>rate(v)||"0 Б/с"),
+     tip:d.etw_ok===false
+       ?"Без прав адміністратора байти по програмах рахуються приблизно."
+       :`Сумарний трафік усіх програм. Середнє і пік — ${span()}.`},
+    {t:"GPU", v:d.gpu_ok?gpuNow.toFixed(0)+"%":"—",
+     s:d.gpu_ok?ap("gpu",pct):esc(d.gpu_status||"недоступно"),
+     tip:d.gpu_ok?`Найзавантаженіша програма зараз. Середнє і пік — ${span()}.`
+                 :"Лічильники GPU недоступні."},
+    {t:"Активних", v:busy,
+     s:`з ${d.apps.length} програм`+(enough?` · сер. ${avg("busy").toFixed(0)}`:""),
+     tip:`Програми, що зараз використовують процесор (від 0.1%). Усього запущено `
+        +`${d.apps.length}. Середнє — ${span()}.`},
+  ].map(c=>`<div class="card${c.alert?" alert":""}" title="${esc(c.tip||"")}">
+      <div class="t">${c.t}</div>
+      <div class="v">${c.v}</div><div class="s">${c.s||""}</div></div>`).join("");
+
+  const age=Math.max(0,Math.round(Date.now()/1000-d.ts));
+  let sub=`· оновлено ${age<3?"щойно":age+" с тому"} · ${d.ncpu} ядер · `+
+    `CPU ${d.cpu_total}%${d.core_max?` (пік ядра ${d.core_max}%)`:""} · `+
+    `RAM ${fb(d.ram_used)} з ${fb(d.ram_total)}`;
+  if(!d.gpu_ok) sub+=` · GPU: ${esc(d.gpu_status||"недоступно")}`;
+  if(d.mem_mode==="uss") sub+=" · пам'ять як у Диспетчері задач";
+  else if(d.mem_mode) sub+=` · пам'ять: ${esc(d.mem_mode)}`;
+  $("#live-sub").textContent=sub;
+  note.style.display="none";
+
+  const s=state.search;
+  let k=state.liveSort.k; const dir=state.liveSort.dir;
+  if(k==="cpu_pct"&&state.cpuMode==="cores") k="cores";
+  let list=d.apps.filter(a=>!s||a.name.includes(s));
+  list.sort((a,b)=>{const x=a[k],y=b[k];
+    return (typeof x==="string"?x.localeCompare(y):(x||0)-(y||0))*dir;});
+  document.querySelectorAll("#live-table th[data-lk]").forEach(th=>
+    th.classList.toggle("sorted",th.dataset.lk===k));
+
+  if(!list.length){ body.innerHTML='<tr><td colspan="7" class="muted" style="padding:14px">'+
+    (s?"Нічого не знайдено":"Немає даних")+"</td></tr>"; return; }
+  // максимуми для підсвітки
+  const mx={disk_bps:Math.max(1,...list.map(a=>a.disk_bps)),
+            net_bps:Math.max(1,...list.map(a=>a.net_bps)),
+            rss:Math.max(1,...list.map(a=>a.rss))};
+  const sc=$("#live-scroll"), keep=sc.scrollTop;
+  body.innerHTML=list.map(a=>{
+    // У режимі «ядра» шкала показує заповнення ОДНОГО ядра — так одразу видно,
+    // хто вперся в стелю однопотоково.
+    const cores=a.cores||0, c1=a.cores1||0;
+    const w=state.cpuMode==="cores"?Math.min(100,c1*100):Math.min(100,a.cpu_pct);
+    const val=state.cpuMode==="cores"
+      ? (cores?cores.toFixed(2)+" яд.":"—")
+      : (a.cpu_pct?a.cpu_pct.toFixed(1)+"%":"—");
+    const hotBar=state.cpuMode==="cores"?c1>=0.85:a.cpu_pct>=25;
+    return `<tr class="approw" onclick="openProc('${esc(a.name)}')"
+      oncontextmenu="procMenu(event,'${esc(a.name)}',${a.nproc||1},'${esc(a.exe||"")}')">
+      <td><div class="nm-cell"><span class="n" title="${esc(a.exe||a.name)}">${esc(a.name)}</span>${
+        a.core_bound?'<span class="tag cb" title="Повністю зайняв одне ядро — впирається в однопотокову стелю">1 ЯДРО</span>':""}</div></td>
+      <td${heat(state.cpuMode==="cores"?c1*100:a.cpu_pct,100)}><div class="cpucell"><div class="cpubar-wrap"><div class="cpubar${hotBar?" hot":""}" style="width:${w}%"></div></div>
+        <span class="val" title="${cores.toFixed(2)} ядра · ${a.cpu_pct}% від усього CPU">${val}</span></div></td>
+      <td${heat(a.rss,mx.rss)}>${a.rss?fb(a.rss):"—"}</td>
+      <td${heat(a.disk_bps,mx.disk_bps)}>${rate(a.disk_bps)||"—"}</td>
+      <td${heat(a.net_bps,mx.net_bps)}>${rate(a.net_bps)||"—"}</td>
+      <td${heat(a.gpu_pct,100)}>${a.gpu_pct?a.gpu_pct.toFixed(1)+"%":"—"}</td>
+      <td class="muted">${a.nproc}</td></tr>`;}).join("");
+  sc.scrollTop=keep;   // не смикати список під час оновлення
+}
+document.querySelectorAll("#live-table th[data-lk]").forEach(th=>{
+  th.onclick=()=>{ const k=th.dataset.lk;
+    if(state.liveSort.k===k) state.liveSort.dir*=-1;
+    else state.liveSort={k,dir:k==="name"?1:-1};
+    renderLive(); };});
+$("#live-toggle").onclick=()=>{ state.liveOn=!state.liveOn;
+  $("#live-toggle").textContent=state.liveOn?"⏸ Пауза":"▶ Продовжити";
+  $("#live-toggle").classList.toggle("active",!state.liveOn);
+  if(state.liveOn) loadLive(); };
+// оновлюємо, лише коли вкладка «Зараз» відкрита і не на паузі
+setInterval(()=>{ if(state.tab==="now") loadLive(); },2000);
+// Температури — окремим, рідшим тактом: вони не змінюються ривками, тож
+// смикати датчики раз на дві секунди немає сенсу.
+setInterval(()=>{ if(state.tab==="now"&&state.liveOn!==false) loadTemps(); },10000);
+// поки йде сканування або замір — стежимо за прогресом
+setInterval(()=>{ if(state.tab!=="health") return;
+  if(state.tool==="scan"&&state.health&&state.health.running) loadHealth();
+  if(state.tool==="lat"){
+    loadLatency();
+    // пошук драйвера опитуємо, лише поки він РЕАЛЬНО працює —
+    // інакше фонове оновлення затирало те, що вже показано на екрані
+    if(state.dpcRunning) loadDpc();
+  }
+},1500);
+
+/* ---------- рендер ---------- */
+const UNATTRIBUTED="(трафік без програми)";
+function badge(a){
+  let h="";
+  // Це не програма, а зведений трафік, який не вдалося ні до кого прив'язати.
+  // Без окремої позначки рядок читається як підозріла невідома програма.
+  if(a.name===UNATTRIBUTED)
+    return '<span class="tag" style="background:#2a3140;color:var(--tx2)" '
+      +'title="Не програма. Сюди потрапляє трафік коротких завантажувачів і '
+      +'служб оновлення, які завершуються швидше, ніж монітор встигає '
+      +'запитати їхнє ім\'я. Дивись домени — за ними видно, хто це був.">'
+      +'НЕ ПРОГРАМА</span>';
+  if(a.running) h+='<span class="tag run" title="Працює зараз">АКТИВНА</span>';
+  if(a.first_seen_ts && state.date===new Date().toISOString().slice(0,10)
+     && a.first_seen_ts>=Date.parse(state.date)/1000) h+='<span class="tag new" title="Вперше з’явилась сьогодні">NEW</span>';
+  if(a.watching) h+='<span class="tag eye" title="Детальне стеження увімкнено">👁</span>';
+  if(a.suspicious) h+='<span class="tag sus" title="Є причини придивитись">⚠</span>';
+  return h;
+}
+function renderApps(){
+  const k=state.sort.k, dir=state.sort.dir, s=state.search.toLowerCase();
+  let list=state.apps.filter(a=>!s||a.name.includes(s));
+  list.sort((a,b)=>{const x=a[k]??-1,y=b[k]??-1;
+    return (typeof x==="string"?x.localeCompare(y):x-y)*dir;});
+  document.querySelectorAll("#apps-table th").forEach(th=>{
+    th.classList.toggle("sorted",th.dataset.k===k);});
+  const tb=$("#apps-body"); tb.innerHTML="";
+  $("#apps-count").textContent="("+list.length+")";
+  $("#apps-empty").style.display=list.length?"none":"block";
+  $("#apps-empty").textContent=state.apps.length?"Нічого не знайдено":
+    "Ще збираються дані — зачекай хвилину-дві після запуску монітора.";
+  for(const a of list){
+    const tr=document.createElement("tr");
+    tr.className="approw"; tr.dataset.name=a.name;
+    tr.innerHTML=`
+      <td><div class="nm-cell"><span class="n" title="${esc(a.exe)}">${esc(a.name)}</span>${badge(a)}</div></td>
+      <td title="${a.nmin?`${a.nmin} хв активності за день`:""}">${fmin(a.nmin)}</td>
+      <td title="${coreHint(a)}">${fcore(a.cpu_core_s)}</td>
+      <td>${a.cpu_pct_max?a.cpu_pct_max.toFixed(0)+"%":"—"}</td>
+      <td${a.cores_max>=0.85?' style="color:var(--org);font-weight:600"':""} title="${a.cores_max>=0.85?"Впиралася в одне ядро":""}">${a.cores_max?a.cores_max.toFixed(2):"—"}</td>
+      <td>${fb(a.rss_max)}</td>
+      <td class="muted">${fb(a.read_b)}</td>
+      <td class="muted">${fb(a.write_b)}</td>
+      <td class="up">${a.sent_b?fb(a.sent_b):"—"}</td>
+      <td class="down">${a.recv_b?fb(a.recv_b):"—"}</td>
+      <td>${a.pub_ips||"—"}</td>
+      <td>${a.dns_count||"—"}</td>
+      <td>${a.ninst||"—"}</td>
+      <td>${a.suspicion_score?`<b style="color:${a.suspicion_score>=70?"var(--red)":a.suspicion_score>=35?"var(--org)":"var(--tx2)"}">${a.suspicion_score}</b>`:"—"}</td>
+      <td><button class="btn small icon" title="Експортувати детальний лог для аналізу Claude"
+        onclick="event.stopPropagation();doExport('${esc(a.name)}')">📤</button></td>`;
+    tr.onclick=()=>toggleDetail(a.name,tr);
+    tb.appendChild(tr);
+    if(state.open===a.name){ const d=document.createElement("tr");
+      d.className="detail"; d.innerHTML='<td colspan="15">Завантажую…</td>';
+      tb.appendChild(d); fillDetail(a,d); }
+  }
+}
+function renderSusp(){
+  const list=state.apps.filter(a=>a.suspicious)
+    .sort((a,b)=>b.suspicion_score-a.suspicion_score);
+  $("#susp-panel").style.display=list.length?"block":"none";
+  $("#sec-clean").style.display=list.length?"none":"block";
+  $("#tb-sec").textContent=list.length||"";
+  // нові програми за день
+  const nw=state.apps.filter(a=>a.first_seen_ts&&a.first_seen_ts>=dayStart())
+    .sort((a,b)=>b.first_seen_ts-a.first_seen_ts);
+  $("#new-count").textContent="("+nw.length+")";
+  dom("new-list").innerHTML=nw.length?nw.map(a=>`
+    <div class="ev" style="padding:6px">
+      <span class="t">${ft(a.first_seen_ts)}</span>
+      <span style="min-width:170px"><b>${esc(a.name)}</b></span>
+      <span class="info" style="flex:1">${esc(a.exe||"")}</span>
+      <button class="btn small" onclick="openProc('${esc(a.name)}')">деталі</button>
+    </div>`).join(""):'<div class="empty">Нових програм не з\'являлось</div>';
+  dom("susp-list").innerHTML=list.map(a=>`
+    <div class="susp-item">
+      <div class="score ${a.suspicion_score>=70?"hi":"mid"}">${a.suspicion_score}</div>
+      <div style="flex:1">
+        <div class="nm">${esc(a.name)} <span class="muted" style="font-size:12px">${esc(a.exe||"")}</span></div>
+        <ul>${a.suspicion_reasons.map(r=>`<li>${esc(r)}</li>`).join("")}</ul>
+        <div class="acts">
+          <button class="btn small" onclick="openProc('${esc(a.name)}')">Деталі</button>
+          <button class="btn small" onclick="doExport('${esc(a.name)}')">📤 Лог для Claude</button>
+          <button class="btn small" onclick="doTrust('${esc(a.name)}','${esc(a.exe||"")}',true)">✓ Довіряю, не показувати</button>
+        </div>
+      </div>
+    </div>`).join("");
+}
+function renderEvents(){
+  const f=state.evFilter, s=state.search.toLowerCase();
+  const list=state.events.filter(e=>(!f||e.kind===f)&&(!s||(e.name||"").includes(s))).slice(0,400);
+  $("#ev-count").textContent="("+list.length+")";
+  const ico={process_start:"▶",process_stop:"⏹",monitor_start:"●",monitor_stop:"○"};
+  dom("events").innerHTML=list.map(e=>`<div class="ev">
+      <span class="t">${fts(e.ts)}</span><span class="k">${ico[e.kind]||"·"}</span>
+      <span><b>${esc(e.name)}</b>${e.pid?' <span class="muted">pid '+e.pid+"</span>":""}</span>
+      <span class="info">${esc(e.info||"")}</span></div>`).join("")
+    ||'<div class="empty">Подій поки нема</div>';
+}
+
+/* ---------- деталі апки ---------- */
+function openDetail(name){ state.open=name; renderApps();
+  setTimeout(()=>{const r=document.querySelector(`tr[data-name="${CSS.escape(name)}"]`);
+    if(r) r.scrollIntoView({behavior:"smooth",block:"center"});},50); }
+function toggleDetail(name){ state.open=state.open===name?null:name;
+  state.detailCharts.forEach(c=>{try{c&&c.destroy()}catch(e){}}); state.detailCharts=[]; renderApps(); }
+async function fillDetail(a,row){
+  let d; try{ d=await api("/api/app?date="+state.date+"&name="+encodeURIComponent(a.name)); }
+  catch(e){ row.firstChild.textContent="Помилка: "+e.message; return; }
+  const sum=d.summary||a;
+  const insts=d.instances.map(i=>`<tr>
+      <td>${i.pid}</td><td>${ft(i.started_ts)}${i.preexisting?' <span class="muted">(до монітора)</span>':""}</td>
+      <td>${i.ended_ts?ft(i.ended_ts):'<span class="down">працює</span>'}</td>
+      <td>${fdur(i.ended_ts?i.ended_ts-i.started_ts:(Date.now()/1000-i.started_ts))}</td>
+      <td>${fdur(i.cpu_core_s)}</td>
+      <td class="muted">${esc(i.parent_name||"")}</td></tr>`).join("");
+  const conns=d.connections.map(c=>`<span class="chip" title="${c.times} раз(ів), ${c.proto}">
+      <b>${esc(c.raddr)}</b>:${c.rport}${c.is_public?"":" 🏠"}</span>`).join("");
+  const doms=d.domains.map(x=>`<span class="chip" title="${x.times} запит(ів)"><b>${esc(x.domain)}</b> ×${x.times}</span>`).join("");
+  row.firstChild.innerHTML=`
+    <div class="dhead">
+      <b style="font-size:15px">${esc(sum.name)}</b>${badge(sum)}
+      <span class="path">${esc(sum.exe||"шлях невідомий")}</span>
+      <span class="spacer"></span>
+      <button class="btn small" onclick="doExport('${esc(sum.name)}')">📤 Детальний лог для Claude</button>
+      <button class="btn small ${sum.watching?"active":""}" id="d-watch">👁 ${sum.watching?"Стежу (вимкнути)":"Стежити детально"}</button>
+      ${sum.suspicion_score?`<button class="btn small" onclick="doTrust('${esc(sum.name)}','${esc(sum.exe||"")}',${sum.ignored?"false":"true"})">${sum.ignored?"⚠ Знову перевіряти":"✓ Довіряю"}</button>`:""}
+    </div>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">
+      ${sum.sig_status?("Підпис: "+esc(sum.sig_status)+" · "):""}
+      ${sum.sha256?("SHA-256: "+sum.sha256.slice(0,16)+"… · "):""}
+      ${sum.first_seen_ts?("вперше помічена: "+new Date(sum.first_seen_ts*1000).toLocaleString("uk-UA")):""}
+    </div>
+    ${sum.suspicion_reasons&&sum.suspicion_reasons.length?`<div class="reasons"><b>Чому в списку уваги:</b><br>${sum.suspicion_reasons.map(esc).join("<br>")}</div>`:""}
+    <div class="dgrid" style="margin-top:10px">
+      <div class="dbox"><h3>CPU та RAM по хвилинах</h3><div class="chartbox"><canvas id="dc1"></canvas></div></div>
+      <div class="dbox"><h3>Мережа по хвилинах ${d.net_minutes.length?"":"<span class='muted'>(нема даних — ETW вимкнений або трафіку не було)</span>"}</h3><div class="chartbox"><canvas id="dc2"></canvas></div></div>
+      <div class="dbox"><h3>Запуски (${d.instances.length})</h3>
+        <div class="minitable"><table>
+          <colgroup><col class="c-pid"><col class="c-t"><col class="c-t"><col class="c-dur"><col class="c-cpu"><col class="c-par"></colgroup>
+          <thead><tr><th>PID</th><th>Старт</th><th>Стоп</th><th>Тривалість</th><th>CPU-час</th><th>Батько</th></tr></thead><tbody>${insts||""}</tbody></table></div></div>
+      <div class="dbox"><h3>З'єднання (${d.connections.length}) і домени (${d.domains.length})</h3>
+        <div class="chips" style="margin-bottom:6px">${doms||'<span class="muted">DNS-запитів не зафіксовано</span>'}</div>
+        <div class="chips">${conns||'<span class="muted">з’єднань не зафіксовано</span>'}</div></div>
+    </div>`;
+  row.querySelector("#d-watch").onclick=async ev=>{
+    ev.stopPropagation();
+    await api("/api/watch",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name:sum.name,on:!sum.watching})});
+    toast(sum.watching?"Стеження вимкнено":"👁 Стеження увімкнено: тепер по «"+esc(sum.name)+
+      "» пишуться сирі 5-секундні семпли. В експорті вони будуть у watch_raw_samples.");
+    await loadApps();
+  };
+  const L=d.minutes.map(m=>ft(m.minute_ts));
+  state.detailCharts.push(mkLine(row.querySelector("#dc1"),[
+    {label:"CPU %",data:d.minutes.map(m=>m.cpu_pct_avg),borderColor:"#60a5fa",yAxisID:"y"},
+    {label:"RAM МіБ",data:d.minutes.map(m=>m.rss_max/1048576),borderColor:"#a78bfa",yAxisID:"y1"},
+  ],L,{scales:{y:{min:0},y1:{position:"right",min:0,grid:{display:false}},
+      x:{ticks:{maxTicksLimit:8}}}}));
+  state.detailCharts.push(mkLine(row.querySelector("#dc2"),[
+    {label:"↑ КіБ",data:d.net_minutes.map(m=>m.sent_b/1024),borderColor:"#f87171"},
+    {label:"↓ КіБ",data:d.net_minutes.map(m=>m.recv_b/1024),borderColor:"#4ade80"},
+  ],d.net_minutes.map(m=>ft(m.minute_ts)),{scales:{y:{min:0},x:{ticks:{maxTicksLimit:8}}}}));
+}
+
+/* ---------- дії ---------- */
+async function doExport(name){
+  try{
+    const r=await api("/api/export",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name,date:state.date})});
+    toast(`📤 Детальний лог збережено:<div class="f">${esc(r.basename)}</div>
+      <div class="muted">${esc(r.hint)}</div>
+      <div class="row"><button class="btn small" onclick="api('/api/open_exports',{method:'POST'})">Відкрити папку exports</button></div>`,12000);
+  }catch(e){ toast("Помилка експорту: "+esc(e.message)); }
+}
+/* ═══════════ КЕРУВАННЯ ПРОЦЕСАМИ ═══════════
+   Рядок у «Зараз» — це ПРОГРАМА, а не процес: у Chrome їх бувають десятки.
+   Тому дії з меню застосовуються до всіх процесів програми (як «Зняти
+   завдання» у Диспетчері задач), а покерувати окремим процесом можна
+   в картці програми, де вони перелічені поіменно. */
+const PRIOS=[["idle","Мінімальний"],["below_normal","Нижче середнього"],
+             ["normal","Звичайний"],["above_normal","Вище середнього"],
+             ["high","Високий"]];
+function ctxClose(){ $("#ctx").classList.remove("open"); }
+document.addEventListener("click",e=>{ if(!e.target.closest("#ctx")) ctxClose(); });
+document.addEventListener("keydown",e=>{ if(e.key==="Escape") ctxClose(); });
+window.addEventListener("blur",ctxClose);
+
+function procMenu(ev,name,nproc,exe){
+  ev.preventDefault(); ev.stopPropagation();
+  const many=nproc>1, all=many?` (${nproc} проц.)`:"";
+  const item=(label,hint,fn,cls)=>({label,hint,fn,cls});
+  const items=[
+    item("Деталі програми","",()=>openProc(name)),
+    item("Експортувати лог","для аналізу",()=>doExport(name)),
+    {sep:true},
+    item("Заморозити"+all,"не вбиває",()=>procAct(name,"app_suspend")),
+    item("Відновити"+all,"",()=>procAct(name,"app_resume")),
+    {sub:"Пріоритет"+all, items:PRIOS.map(([k,t])=>
+      item(t,"",()=>procAct(name,"app_priority",{level:k})))},
+    {sep:true},
+    item("Відкрити теку","у Провіднику",()=>openFolder(exe)),
+    {sep:true},
+    item("Завершити"+all,"разом із дочірніми",
+         ()=>confirmKillApp(name,nproc),"danger"),
+  ];
+  const box=$("#ctx");
+  box.innerHTML=`<div class="hdr">${esc(name)}${many?` · ${nproc} процесів`:""}</div>`
+    +items.map((it,i)=>{
+      if(it.sep) return '<div class="sep"></div>';
+      if(it.sub) return `<div class="ci" data-sub="${i}">${esc(it.sub)}
+          <span class="hint">▸</span></div>
+        <div class="sub" id="sub${i}">${it.items.map((s,j)=>
+          `<div class="ci" data-i="${i}" data-j="${j}">${esc(s.label)}</div>`).join("")}</div>`;
+      return `<div class="ci${it.cls?" "+it.cls:""}" data-i="${i}">${esc(it.label)}
+        ${it.hint?`<span class="hint">${esc(it.hint)}</span>`:""}</div>`;
+    }).join("");
+  box.classList.add("open");
+  // тримаємо меню в межах вікна
+  box.style.left="0px"; box.style.top="0px";
+  const r=box.getBoundingClientRect();
+  box.style.left=Math.min(ev.clientX, innerWidth-r.width-8)+"px";
+  box.style.top=Math.min(ev.clientY, innerHeight-r.height-8)+"px";
+
+  box.querySelectorAll("[data-sub]").forEach(el=>{
+    el.onclick=e=>{ e.stopPropagation();
+      $("#sub"+el.dataset.sub).classList.toggle("open"); };});
+  box.querySelectorAll(".ci[data-i]").forEach(el=>{
+    if(el.dataset.sub!==undefined) return;
+    el.onclick=e=>{ e.stopPropagation(); ctxClose();
+      const it=items[+el.dataset.i];
+      (el.dataset.j!==undefined?it.items[+el.dataset.j]:it).fn(); };});
+}
+window.procMenu=procMenu;
+
+/* Що САМЕ виконує окремий процес.
+   «pythonw.exe» — це не програма, а інтерпретатор: під одним іменем можуть
+   працювати п'ять різних скриптів. Ім'я процесу тут не допомагає взагалі,
+   відповідь є лише в командному рядку. Те саме зі svchost, node, java. */
+const KIND_LABEL={py:"Python-скрипт",js:"Node-скрипт",java:"Java",
+  shell:"Команда оболонки",script:"Сценарій",dll:"Бібліотека",
+  electron:"Electron",svc:"Служби Windows",rb:"Ruby",pl:"Perl",
+  php:"PHP",dotnet:".NET"};
+async function toggleProcDetail(pid,name){
+  const row=$("#pdet-"+pid); if(!row) return;
+  const cell=row.firstElementChild;
+  if(row.style.display!=="none"){ row.style.display="none"; return; }
+  row.style.display="";
+  cell.innerHTML='<div class="muted" style="padding:9px 12px;font-size:12.5px">читаю…</div>';
+  let d;
+  try{
+    d=await api("/api/proc",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"details",pid,name})});
+  }catch(e){
+    cell.innerHTML=`<div class="err" style="padding:9px 12px;font-size:12.5px">${esc(e.message)}</div>`;
+    return;
+  }
+  if(d.error){
+    cell.innerHTML=`<div class="muted" style="padding:9px 12px;font-size:12.5px">${esc(d.error)}</div>`;
+    return;
+  }
+  const kv=(k,v)=>v?`<div style="display:flex;gap:10px;padding:2px 0">
+    <div style="color:var(--tx2);min-width:150px;flex:none">${k}</div>
+    <div style="word-break:break-all">${v}</div></div>`:"";
+  const role=d.role||{};
+  const cores=(d.affinity||[]).length;
+  cell.innerHTML=`<div style="padding:10px 12px;background:#12161e;
+      border-top:1px solid var(--line);font-size:12.5px">
+    ${role.what?`<div style="margin-bottom:9px;padding:8px 10px;border-radius:8px;
+        background:rgba(96,165,250,.10);border:1px solid #2c4a72">
+        <b style="color:var(--blue)">${esc(KIND_LABEL[role.kind]||"Виконує")}:</b>
+        <b>${esc(role.what)}</b>
+        ${role.detail?`<div class="muted" style="font-size:11.5px;margin-top:3px">${esc(role.detail)}</div>`:""}
+      </div>`:""}
+    ${kv("Командний рядок", d.cmdline?`<code style="font-size:11.5px">${esc(d.cmdline)}</code>`
+        :'<span class="muted">не вдалося прочитати (потрібні вищі права)</span>')}
+    ${kv("Робоча тека", esc(d.cwd||""))}
+    ${kv("Запущено від", esc(d.username||""))}
+    ${kv("Батьківський процес", esc(d.parent||"")+(d.ppid?` <span class="muted">(pid ${d.ppid})</span>`:""))}
+    ${kv("Пріоритет", esc(d.priority||""))}
+    ${kv("Ядра", d.affinity?`${cores} із ${d.ncpu}`+(cores<d.ncpu?
+        ` <span class="muted">— обмежено</span>`:""):"")}
+    ${kv("Дочірніх процесів", (d.children||[]).length||"")}
+    ${kv("Відкриті файли", d.files===null?'<span class="muted">не дали подивитись</span>'
+        :(d.files||[]).length?`${d.files.length}<div class="muted" style="font-size:11.5px">
+          ${d.files.slice(0,6).map(esc).join("<br>")}${d.files.length>6?"<br>…":""}</div>`:"")}
+    ${kv("Змінні середовища", d.env_count?`${d.env_count} шт.
+        <span class="muted" style="font-size:11.5px">(значення не показуємо — там бувають токени)</span>`:"")}
+    <div style="display:flex;gap:7px;margin-top:10px;flex-wrap:wrap">
+      <button class="btn small" onclick="procOne(${pid},'${esc(name)}','${d.suspended?"resume":"suspend"}')">
+        ${d.suspended?"Відновити":"Заморозити"}</button>
+      <button class="btn small" onclick="openFolder('${esc(d.exe||"")}')">Відкрити теку</button>
+      <button class="btn small" style="border-color:var(--red);color:var(--red)"
+        onclick="procOne(${pid},'${esc(name)}','kill_tree')">Завершити з дочірніми</button>
+    </div></div>`;
+}
+window.toggleProcDetail=toggleProcDetail;
+
+async function procOne(pid,name,action){
+  try{
+    const r=await api("/api/proc",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action,pid,name})});
+    if(!r.ok){ toast("Не вдалося: "+esc(r.error||"")); return; }
+    toast("Готово"+(r.note?" — "+esc(r.note):""));
+    if(state.procOpen) openProc(state.procOpen);
+  }catch(e){ toast("Не вдалося: "+esc(e.message)); }
+}
+window.procOne=procOne;
+
+async function procAct(name,action,extra){
+  let r;
+  try{ r=await api("/api/proc",{method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(Object.assign({action,name},extra||{}))}); }
+  catch(e){ toast("Не вдалося: "+esc(e.message)); return null; }
+  if(!r.ok){ toast("Не вдалося: "+esc(r.error||"")); return null; }
+  toast("Готово" + (r.note?" — "+esc(r.note):""));
+  loadLive(); if(state.procOpen) openProc(state.procOpen);
+  return r;
+}
+window.procAct=procAct;
+
+async function openFolder(exe){
+  if(!exe){ toast("Шлях до файлу невідомий"); return; }
+  try{
+    const r=await api("/api/proc",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"open_folder",path:exe})});
+    if(!r.ok) toast("Не вдалося: "+esc(r.error||""));
+  }catch(e){ toast("Не вдалося: "+esc(e.message)); }
+}
+window.openFolder=openFolder;
+
+function confirmKillApp(name,nproc){
+  const many=nproc>1;
+  ask(`Завершити «${esc(name)}»?`,
+      (many?`Буде завершено <b>${nproc} процесів</b> разом із дочірніми. `:"")
+      +`Незбережені дані в цій програмі буде втрачено — Windows не питатиме
+        про збереження, як не питає й Диспетчер задач.`,
+      "Завершити", ()=>procAct(name,"app_kill"));
+}
+/* Проста модалка підтвердження — щоб не користуватись confirm(), який
+   у вбудованому вікні блокує весь інтерфейс. */
+function ask(title,html,okLabel,fn){
+  const d=document.createElement("div");
+  d.style.cssText="position:fixed;inset:0;z-index:500;background:rgba(6,8,12,.7);"
+    +"display:flex;align-items:center;justify-content:center";
+  d.innerHTML=`<div style="background:var(--panel);border:1px solid var(--line);
+      border-radius:14px;max-width:460px;padding:18px 20px">
+    <div style="font-size:15px;font-weight:600;margin-bottom:8px">${title}</div>
+    <div style="font-size:13px;color:var(--tx2);line-height:1.55">${html}</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button class="btn" data-no>Скасувати</button>
+      <button class="btn" data-yes style="border-color:var(--red);color:var(--red)">
+        ${esc(okLabel)}</button></div></div>`;
+  const close=()=>d.remove();
+  d.querySelector("[data-no]").onclick=close;
+  d.querySelector("[data-yes]").onclick=()=>{ close(); fn(); };
+  d.onclick=e=>{ if(e.target===d) close(); };
+  document.body.appendChild(d);
+  d.querySelector("[data-no]").focus();
+}
+window.ask=ask;
+
+/* Стан підпису людською мовою + кнопка перевірити ще раз.
+   Раніше в картці стояв сирий англійський код на кшталт «HashMismatch», і що
+   з ним робити — доводилось гуглити. */
+const SIG_HUMAN={
+  Valid:["підпис дійсний","ok","Файл підписаний і не змінювався після підписання."],
+  NotSigned:["підпису немає","warn","Саме по собі не погано: багато дрібних утиліт не підписують."],
+  HashMismatch:["файл не збігається з підписом","bad",
+    "Підпис на місці, але каже, що файл мав бути іншим — тобто файл змінили вже після підписання."],
+  NotTrusted:["підпису не довіряють","bad",
+    "Підпис є, але його сертифікат не з довіреного кореня."],
+  UnknownError:["не вдалося перевірити","warn","Windows не змогла дати відповідь."],
+  NotSupportedFileFormat:["формат не підтримує підпис","",""],
+  Incompatible:["несумісний підпис","warn",""],
+};
+function sigHtml(inf,exe){
+  if(!inf.sig_status) return exe?`<span class="muted">не перевірявся</span>
+    <button class="btn small" onclick="recheckSig('${esc(exe)}')">перевірити</button>`:"";
+  const h=SIG_HUMAN[inf.sig_status]||[inf.sig_status,"",""];
+  const col=h[1]==="bad"?"var(--org)":h[1]==="ok"?"var(--acc)":"";
+  return `<span${col?` style="color:${col}"`:""} title="${esc(h[2]||"")}">${esc(h[0])}</span>
+    <span class="muted" style="font-size:11.5px">(${esc(inf.sig_status)})</span>
+    ${inf.sig_message?`<div class="muted" style="font-size:11.5px;margin-top:2px">${esc(inf.sig_message)}</div>`:""}
+    ${exe?`<button class="btn small" style="margin-top:4px"
+       onclick="recheckSig('${esc(exe)}')">перевірити ще раз</button>`:""}
+    <span id="sig-res" class="muted" style="font-size:11.5px"></span>`;
+}
+async function recheckSig(exe){
+  const box=$("#sig-res"); if(box) box.textContent=" перевіряю…";
+  let r;
+  try{ r=await api("/api/recheck_sig",{method:"POST",
+        headers:{"Content-Type":"application/json"},body:JSON.stringify({exe})}); }
+  catch(e){ if(box) box.textContent=" помилка: "+e.message; return; }
+  if(r.error){ if(box) box.textContent=" "+r.error; return; }
+  toast(`Підпис: ${r.human||r.status}${r.signer?" · "+r.signer:""}`);
+  if(state.procOpen) await openProc(state.procOpen);
+  await loadApps();
+}
+window.recheckSig=recheckSig;
+
+async function doTrust(name,exe,on){
+  let r;
+  try{
+    r=await api("/api/trust",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name,exe,on})});
+  }catch(e){ toast("Не вдалося: "+esc(e.message)); return; }
+  // Сервер тепер повертає, скільки рядків справді змінилось. Раніше він завжди
+  // казав «ok», навіть коли не змінив нічого — і позначка мовчки не діяла.
+  if(!r.ok){ toast("Не вдалося: "+esc(r.error||"позначка не збереглась")); return; }
+  toast(on?"✓ Позначено як довірену — більше не показуватиму в «Зверни увагу»"
+        :"Знову перевірятиму цю програму");
+  await loadApps();
+  if(state.procOpen) await openProc(state.procOpen);   // оновити відкриту картку
+}
+window.doExport=doExport; window.doTrust=doTrust; window.openDetail=openDetail;
+
+/* ═══════════ КАРТКА ПРОГРАМИ ═══════════ */
+function closeProc(){ $("#pmodal").classList.remove("open"); state.procOpen=null; }
+window.closeProc=closeProc;
+document.addEventListener("keydown",e=>{ if(e.key==="Escape") closeProc(); });
+
+async function openProc(name){
+  state.procOpen=name;
+  $("#pmodal").classList.add("open");
+  $("#pm-name").textContent=name;
+  $("#pm-path").textContent="";
+  $("#pm-body").innerHTML='<div class="empty">Збираю дані…</div>';
+  let d;
+  try{
+    // не чекаємо вічно: якщо збір затягнувся — показуємо це, а не «збираю дані»
+    const ctl=new AbortController();
+    const to=setTimeout(()=>ctl.abort(),20000);
+    const r=await fetch("/api/process?name="+encodeURIComponent(name)+"&date="+state.date,
+                        {signal:ctl.signal});
+    clearTimeout(to);
+    if(!r.ok) throw new Error("сервер відповів "+r.status);
+    d=await r.json();
+  }
+  catch(e){
+    const msg = e.name==="AbortError"
+      ? "Збір даних триває надто довго. Спробуй ще раз — або надішли мені загальний звіт (⚙ Налаштування)."
+      : "Помилка: "+esc(e.message);
+    $("#pm-body").innerHTML=`<div class="empty">${msg}</div>`; return; }
+  if(d.error){ $("#pm-body").innerHTML=`<div class="empty">${esc(d.error)}</div>`; return; }
+  state.procData=d;
+  renderProc(d);
+}
+function renderProc(d){
+  const s=d.summary||{}, lv=d.live||{}, inf=d.exe_info||{};
+  $("#pm-path").textContent=d.exe||"шлях невідомий";
+  $("#pm-watch").textContent=d.watching?"👁 Стежу":"👁 Стежити";
+  $("#pm-watch").classList.toggle("active",!!d.watching);
+
+  const stat=(t,v,c)=>`<div class="pstat"><div class="t">${t}</div>
+    <div class="v"${c?` style="color:${c}"`:""}>${v}</div></div>`;
+  const live=[
+    stat("CPU зараз", lv.cpu_pct!=null?lv.cpu_pct.toFixed(1)+"%":"—",
+         lv.core_bound?"var(--org)":""),
+    stat("Ядер", lv.cores!=null?lv.cores.toFixed(2):"—", lv.core_bound?"var(--org)":""),
+    stat("Пам'ять", fb(d.total.rss)),
+    stat("Диск", lv.disk_bps?rate(lv.disk_bps):"—"),
+    stat("Мережа", lv.net_bps?rate(lv.net_bps):"—"),
+    stat("GPU", lv.gpu_pct?lv.gpu_pct.toFixed(1)+"%":"—"),
+    stat("Процесів", d.nproc),
+    stat("Потоків", d.total.threads||"—"),
+  ].join("");
+
+  const day=[
+    stat("Процесорний час", s.cpu_core_s?fcore(s.cpu_core_s):"—"),
+    stat("Ядер пік", s.cores_max?s.cores_max.toFixed(2):"—",
+         s.cores_max>=0.85?"var(--org)":""),
+    stat("RAM пік", fb(s.rss_max)),
+    stat("↑ Відправлено", s.sent_b?fb(s.sent_b):"—"),
+    stat("↓ Отримано", s.recv_b?fb(s.recv_b):"—"),
+    stat("Запусків", s.ninst||"—"),
+    stat("Різних IP", s.pub_ips||"—"),
+    stat("Балів", s.suspicion_score||0, s.suspicion_score>=35?"var(--org)":""),
+  ].join("");
+
+  const kv=(k,v)=>v?`<div class="kv"><div class="k">${k}</div><div class="v">${v}</div></div>`:"";
+  const ident=[
+    kv("Шлях", esc(d.exe||"")),
+    kv("Цифровий підпис", sigHtml(inf, d.exe||"")),
+    kv("Підписав", inf.sig_signer?esc(inf.sig_signer)
+       :(inf.sig_status?'<span class="muted">видавця не вказано</span>':"")),
+    kv("Ким виданий", inf.sig_issuer?esc(inf.sig_issuer):""),
+    // Сертифікат може бути прострочений, і це САМО ПО СОБІ не проблема:
+    // якщо підпис має мітку часу, він лишається дійсним після закінчення
+    // сертифіката. Тому показуємо дату спокійно, без червоного.
+    kv("Сертифікат до", inf.sig_ts?(esc(inf.sig_ts)+(Date.parse(inf.sig_ts)<Date.now()
+       ?' <span class="muted">— строк вийшов; для підпису з міткою часу це нормально</span>':"")):""),
+    kv("SHA-256", inf.sha256?`<code style="font-size:11.5px">${esc(inf.sha256)}</code>
+       <a class="btn small" style="margin-left:8px"
+          href="https://www.virustotal.com/gui/file/${esc(inf.sha256)}"
+          target="_blank" rel="noopener"
+          title="Відкриє VirusTotal з цим хешем — сам файл нікуди не надсилається"
+          >перевірити на VirusTotal ↗</a>`:""),
+    kv("Розмір файлу", inf.size?fb(inf.size):""),
+    kv("Вперше помічена", inf.first_seen?new Date(inf.first_seen*1000).toLocaleString("uk-UA"):""),
+    kv("Дата файлу", inf.mtime?new Date(inf.mtime*1000).toLocaleString("uk-UA"):""),
+  ].join("")||'<div class="muted" style="font-size:12.5px">Немає даних про файл</div>';
+
+  const procs=(d.processes||[]).map(p=>`<tr class="prow" data-pid="${p.pid}"
+      title="Клацни, щоб побачити, що саме виконує цей процес">
+      <td style="text-align:left">${p.pid}</td>
+      <td>${fb(p.rss)}</td><td>${p.threads}</td>
+      <td class="muted">${esc(p.status||"")}</td>
+      <td class="muted">${p.started?ft(p.started):"—"}</td>
+      <td class="muted" style="text-align:left">${esc(p.parent||"")}</td>
+      <td>${p.conns!=null?p.conns:"—"}</td>
+      <td><button class="btn small" onclick="event.stopPropagation();killProc(${p.pid},'${esc(d.name)}')"
+        title="Завершити цей процес">✕</button></td>
+    </tr>
+    <tr class="pdet" id="pdet-${p.pid}" style="display:none">
+      <td colspan="8" style="padding:0"></td></tr>`).join("");
+
+  const doms=(d.domains||[]).map(x=>`<span class="chip"><b>${esc(x.domain)}</b> ×${x.times}</span>`).join("");
+  const cns=(d.connections||[]).slice(0,60).map(c=>`<span class="chip">${esc(c.raddr)}:${c.rport}</span>`).join("");
+  const evs=(d.events||[]).slice(0,25).map(e=>`<div class="ev">
+      <span class="t">${fts(e.ts)}</span>
+      <span class="k">${e.kind==="process_start"?"▶":"⏹"}</span>
+      <span class="info" style="flex:1">${esc(e.info||"")}${e.pid?` · pid ${e.pid}`:""}</span></div>`).join("");
+  const hist=(d.history||[]).map(h=>`<tr>
+      <td style="text-align:left">${esc(h.day)}</td>
+      <td>${fdur(h.cpu_core_s)}</td><td>${fb(h.rss_max)}</td>
+      <td>${h.sent_b?fb(h.sent_b):"—"}</td><td>${h.recv_b?fb(h.recv_b):"—"}</td>
+      <td>${h.ninst||"—"}</td></tr>`).join("");
+
+  $("#pm-body").innerHTML=`
+    ${s.suspicion_reasons&&s.suspicion_reasons.length?
+      `<div class="reasons" style="margin-bottom:16px"><b>Чому в списку уваги:</b><br>
+       ${s.suspicion_reasons.map(esc).join("<br>")}</div>`:""}
+
+    <div class="psec"><h3>Зараз ${d.running?"":"— програма не запущена"}</h3>
+      <div class="pstats">${live}</div></div>
+
+    <div class="psec"><h3>За день (${esc(d.date)})</h3>
+      <div class="pstats">${day}</div></div>
+
+    <div class="pgrid">
+      <div class="psec"><h3>Про файл</h3>${ident}</div>
+      <div class="psec"><h3>Процеси (${d.nproc})</h3>
+        ${procs?`<div class="minitable" style="max-height:460px"><table>
+          <thead><tr><th style="text-align:left">PID</th><th>Пам'ять</th><th>Потоків</th>
+          <th>Стан</th><th>Старт</th><th style="text-align:left">Батько</th><th>З'єдн.</th><th></th>
+          </tr></thead><tbody>${procs}</tbody></table></div>`
+          :'<div class="muted" style="font-size:12.5px">Зараз не запущена</div>'}</div>
+    </div>
+
+    <div class="psec"><h3>Куди ходить у мережу</h3>
+      ${doms?`<div style="margin-bottom:8px"><div class="muted" style="font-size:12px;margin-bottom:5px">Домени:</div>
+        <div class="chips">${doms}</div></div>`:""}
+      ${cns?`<div><div class="muted" style="font-size:12px;margin-bottom:5px">Адреси:</div>
+        <div class="chips">${cns}</div></div>`:""}
+      ${!doms&&!cns?'<div class="muted" style="font-size:12.5px">Мережевої активності не зафіксовано</div>':""}
+    </div>
+
+    <div class="pgrid">
+      <div class="psec"><h3>Події за день</h3>
+        ${evs?`<div class="events-list" style="max-height:220px">${evs}</div>`
+             :'<div class="muted" style="font-size:12.5px">Подій не було</div>'}</div>
+      <div class="psec"><h3>Попередні дні</h3>
+        ${hist?`<div class="minitable" style="max-height:220px"><table>
+          <thead><tr><th style="text-align:left">День</th><th>CPU</th><th>RAM</th>
+          <th>↑</th><th>↓</th><th>Зап.</th></tr></thead><tbody>${hist}</tbody></table></div>`
+          :'<div class="muted" style="font-size:12.5px">Історії ще немає</div>'}</div>
+    </div>
+    <div class="corenote" style="margin-top:10px;white-space:normal;cursor:default">
+      ${d.partial?`показано ${(d.processes||[]).length} процесів із ${d.nfound} — решту
+        пропущено, щоб картка не гальмувала. `:""}зібрано за ${(d.timing||{}).total_ms||0} мс
+    </div>`;
+
+  // розкриття рядка процесу — саме тут видно, ЩО він виконує
+  $("#pm-body").querySelectorAll("tr.prow").forEach(tr=>{
+    tr.onclick=()=>toggleProcDetail(+tr.dataset.pid, d.name);
+  });
+
+  $("#pm-export").onclick=()=>doExport(d.name);
+  $("#pm-watch").onclick=async()=>{
+    await api("/api/watch",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name:d.name,on:!d.watching})});
+    toast(d.watching?"Стеження вимкнено":"👁 Стеження увімкнено");
+    openProc(d.name);
+  };
+}
+window.openProc=openProc;
+
+async function killProc(pid,name){
+  if(!confirm(`Завершити процес «${name}» (PID ${pid})?\n\n`+
+    "Це те саме, що «Зняти завдання» в Диспетчері задач. Незбережені дані "+
+    "цієї програми можуть втратитись. Критичні процеси Windows монітор "+
+    "не чіпає в будь-якому разі.")) return;
+  try{
+    const r=await api("/api/kill",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({pid,name})});
+    if(r.ok){
+      toast(`✓ Процес ${esc(name)} (${pid}) завершено`);
+      if(state.procOpen) openProc(state.procOpen);
+      if(state.tool==="clip") setTimeout(checkClipboard,600);
+    } else toast("Не вдалося: "+esc(r.error||""));
+  }catch(e){ toast("Помилка: "+esc(e.message)); }
+}
+window.killProc=killProc;
+
+/* ═══════════ АВТОЗАПУСК ═══════════ */
+async function loadStartup(withServices){
+  $("#a-state").textContent="читаю…";
+  let d;
+  try{ d=await api("/api/startup"+(withServices?"?services=1":"")); }
+  catch(e){ $("#a-state").textContent=""; toast("Помилка: "+esc(e.message)); return; }
+  $("#a-state").textContent="";
+  state.startupData=d;
+  const su=d.startup||{};
+  if(!su.supported){
+    $("#a-apps").innerHTML=`<div class="panel"><div class="empty">${esc(su.reason||"недоступно")}</div></div>`;
+    return;
+  }
+  const items=su.items||[];
+  const on=items.filter(i=>i.enabled).length;
+  $("#a-apps").innerHTML=`<div class="panel">
+    <h2>Програми (${items.length}) <span class="muted">увімкнено: ${on}</span></h2>
+    ${!su.admin?'<div class="muted" style="font-size:12.5px;margin-bottom:10px">Записи «для всіх» доступні лише з правами адміністратора.</div>':""}
+    ${items.map(i=>`<div class="arow${i.enabled?"":" off"}">
+      <div class="ai"><b>${esc(i.name)}</b>
+        <span>${esc(i.command||"")}</span></div>
+      <span class="badge-sm">${esc(i.where)}</span>
+      <div class="sw${i.enabled?" on":""}" data-sid="${esc(i.id)}"
+        ${i.can_toggle?"":'style="opacity:.35;pointer-events:none"'}></div>
+    </div>`).join("")}
+  </div>`;
+  document.querySelectorAll("[data-sid]").forEach(el=>{
+    el.onclick=async()=>{
+      if(el.classList.contains("busy")) return;
+      const on=!el.classList.contains("on");
+      el.classList.add("busy");
+      // .sw.busy має pointer-events:none. Раніше зняття цього класу стояло
+      // після await — тож будь-яка помилка запиту лишала перемикач назавжди
+      // сірим і неклікабельним. Тепер знімається у finally, хай там що.
+      try{
+        const r=await api("/api/startup",
+          {method:"POST",headers:{"Content-Type":"application/json"},
+           body:JSON.stringify({what:"app",id:el.dataset.sid,enable:on})});
+        if(!r.ok){ toast("Не вдалося: "+esc(r.error||"невідома причина")); return; }
+        el.classList.toggle("on",on);
+        const row=el.closest(".arow"); if(row) row.classList.toggle("off",!on);
+        toast(on?"Увімкнено в автозапуску"
+                :"Вимкнено з автозапуску — запис збережено, можна повернути");
+      }
+      catch(e){ toast("Не вдалося: "+esc(e.message||"немає зв'язку з монітором")); }
+      finally{ el.classList.remove("busy"); }
+    };});
+
+  const sv=d.services;
+  if(!sv){ $("#a-svc").innerHTML=""; return; }
+  if(!sv.supported){ $("#a-svc").innerHTML=""; return; }
+  const list=sv.items||[];
+  const notable=list.filter(s=>s.notable);
+  $("#a-svc").innerHTML=`<div class="panel">
+    <h2>Служби (${list.length}) <span class="muted">сторонніх на автозапуску: ${notable.length}</span></h2>
+    <div class="muted" style="font-size:12.5px;margin-bottom:10px">
+      Режим «Вручну» безпечніший за «Вимкнено»: служба не стартує сама, але
+      система за потреби її підніме. ${sv.protected_count} критичних служб
+      Windows захищені й не змінюються.
+      ${!sv.admin?"<br>Для змін потрібні права адміністратора.":""}
+    </div>
+    <div style="max-height:520px;overflow:auto">
+    ${list.slice(0,200).map(s=>`<div class="arow">
+      <div class="ai"><b>${esc(s.title)}</b>
+        <span>${esc(s.name)}${s.desc?" · "+esc(s.desc.slice(0,110)):""}</span></div>
+      ${s.protected?'<span class="badge-sm prot">захищена</span>':""}
+      ${s.microsoft?'<span class="badge-sm ms">Microsoft</span>':""}
+      <span class="badge-sm">${esc(s.state)}</span>
+      <select data-svc="${esc(s.name)}" ${s.can_change?"":"disabled"}
+        style="font-size:12px;padding:4px 8px">
+        ${["auto","manual","disabled"].map(m=>{
+          const lbl={auto:"Автоматично",manual:"Вручну",disabled:"Вимкнено"}[m];
+          const cur=(s.start||"").toLowerCase();
+          const sel=(m==="auto"&&cur.startsWith("auto"))||
+                    (m==="manual"&&cur.startsWith("manual"))||
+                    (m==="disabled"&&cur.startsWith("disab"));
+          return `<option value="${m}"${sel?" selected":""}>${lbl}</option>`}).join("")}
+      </select>
+    </div>`).join("")}
+    </div></div>`;
+  document.querySelectorAll("[data-svc]").forEach(el=>{
+    el.onchange=async()=>{
+      el.disabled=true;
+      try{
+        const r=await api("/api/startup",
+          {method:"POST",headers:{"Content-Type":"application/json"},
+           body:JSON.stringify({what:"service",name:el.dataset.svc,mode:el.value})});
+        toast(r.ok?`Служба «${esc(el.dataset.svc)}» → ${el.options[el.selectedIndex].text}`
+                  :"Не вдалося: "+esc(r.error||""));
+        if(!r.ok) loadStartup(true);
+      }
+      catch(e){ toast("Не вдалося: "+esc(e.message)); loadStartup(true); }
+      finally{ el.disabled=false; }
+    };});
+}
+$("#a-reload").onclick=()=>loadStartup(!!state.showServices);
+$("#a-services").onclick=()=>{ state.showServices=!state.showServices;
+  $("#a-services").textContent=state.showServices?"Сховати служби":"Показати служби";
+  $("#a-services").classList.toggle("active",state.showServices);
+  loadStartup(state.showServices); };
+
+/* ═══════════ ЗДОРОВ'Я: вибір інструмента ═══════════ */
+state.tool=null;
+function setTool(t){
+  // «temp» більше не інструмент: температури живуть у «Зараз». Якщо в
+  // localStorage лишився старий вибір — не вішаємо порожній екран.
+  if(t==="temp") t=null;
+  state.tool=t;
+  $("#hub").classList.toggle("hidden",!!t);
+  document.querySelectorAll(".toolview").forEach(v=>
+    v.classList.toggle("active", t && v.id==="tool-"+t));
+  if(t==="scan") loadHealth();
+  if(t==="lat"){ loadLatency(); loadDpc(); }
+  if(t==="clip") { if(!state.clipData) checkClipboard(); }
+  if(!t) renderHub();
+  try{ localStorage.setItem("pcmon.tool",t||""); }catch(e){}
+}
+document.querySelectorAll(".tool").forEach(el=>el.onclick=()=>setTool(el.dataset.tool));
+document.querySelectorAll(".toolview .back").forEach(b=>b.onclick=()=>setTool(null));
+
+/* ═══════════ ТЕМПЕРАТУРИ ═══════════ */
+/* Живуть одним компактним рядком під картками «Зараз»: окрема вкладка
+   заради трьох чисел змушувала кудись ходити, щоб подивитись те, на що
+   дивляться разом із CPU й GPU. Подробиці (джерела, чому немає процесора,
+   відеопам'ять) сховані за «детальніше» і не займають місця щодня. */
+const TC=(v,warn,bad)=>v>=bad?"var(--red)":v>=warn?"var(--org)":"var(--acc)";
+
+async function loadTemps(force){
+  let d;
+  try{ d=await api("/api/temps"+(force?"?force=1":"")); }
+  catch(e){ state.tempsErr=e.message; renderTemps(); return; }
+  state.tempsErr=""; state.temps=d;
+  renderTemps();
+}
+
+function renderTemps(){
+  const d=state.temps;
+  const strip=$("#temps"), more=$("#temps-more");
+  if(!strip) return;
+  if(state.tempsErr && !d){
+    strip.innerHTML=`<span class="tchip"><b>🌡 датчики</b>
+      <span class="tv muted" style="font-size:12.5px">${esc(state.tempsErr)}</span></span>`;
+    return;
+  }
+  if(!d){ strip.innerHTML=""; return; }
+
+  // Назви накопичувачів довгі («Samsung SSD 990 PRO 2TB»), а в рядку потрібне
+  // коротке впізнаване. Прибираємо назву виробника — вона однакова в усіх
+  // моделей і нічого не розрізняє; повна назва лишається в підказці.
+  const VENDOR=/^(samsung|wdc|wd|western digital|seagate|kingston|crucial|intel|micron|sk ?hynix|hynix|adata|corsair|toshiba|sandisk|patriot|gigabyte|silicon ?power|transcend|pny|team ?group)\s+/i;
+  const short=(s,n)=>{ s=String(s||"").replace(VENDOR,"").replace(/\s+/g," ").trim();
+    return s.length>n?s.slice(0,n-1)+"…":s; };
+  const chip=(label,temp,warn,bad,tip)=>`<span class="tchip${temp>=warn?" hot":""}"
+     title="${esc(tip||label)}"><b>${esc(label)}</b>
+     <span class="tv" style="color:${TC(temp,warn,bad)}">${temp}°</span></span>`;
+
+  const chips=[];
+  (d.gpus||[]).forEach((g,i)=>{
+    if(g.temp==null) return;
+    const extra=[g.fan!=null?`вентилятор ${g.fan}%`:"",
+                 g.power_w!=null?`${g.power_w} Вт`:""].filter(Boolean).join(" · ");
+    chips.push(chip((d.gpus.length>1?`GPU ${i+1}`:"GPU"), g.temp, 75, 85,
+      (g.name||"Відеокарта")+(extra?" — "+extra:"")));
+  });
+  (d.disks||[]).forEach(x=>{
+    if(x.temp==null) return;
+    chips.push(chip(short(x.name,16), x.temp, 55, 65,
+      [x.name, x.media, x.wear!=null?`знос ${x.wear}%`:""].filter(Boolean).join(" · ")));
+  });
+  (d.zones||[]).forEach(z=>{
+    if(z.temp==null) return;
+    chips.push(chip("Зона "+z.name, z.temp, 70, 85, "Теплова зона ACPI "+z.name));
+  });
+
+  strip.innerHTML=(chips.length?chips.join("")
+      :`<span class="tchip"><b>🌡 температури</b>
+         <span class="tv muted" style="font-size:12.5px">датчики не відповіли</span></span>`)
+    +`<button class="tbtn" onclick="toggleTemps()">${state.tempsOpen?"згорнути":"детальніше"}</button>`;
+
+  if(!more) return;
+  if(!state.tempsOpen){ more.innerHTML=""; return; }
+  const g0=(d.gpus||[]).find(g=>g.mem_total);
+  const src=Object.entries(d.sources||{}).map(([k,v])=>
+    `<div class="hitem s-${/актив|з температ|шт\./.test(v)?"ok":"info"}">
+       <span class="hdot"></span><div><b>${esc(k)}</b>
+       <span class="muted"> — ${esc(v)}</span></div></div>`).join("");
+  more.innerHTML=`<div class="panel">
+    <div style="display:flex;gap:9px;align-items:center;margin-bottom:10px">
+      <b style="font-size:13px">🌡 Датчики</b>
+      <button class="btn small" onclick="loadTemps(true)">⟳ Перечитати</button>
+    </div>
+    ${g0?`<div class="muted" style="font-size:12.5px;margin-bottom:8px">
+       Відеопам'ять: <b style="color:var(--tx)">${fb(g0.mem_used)}</b> зайнято,
+       вільно ${fb(g0.mem_free)} з ${fb(g0.mem_total)}</div>`:""}
+    <div class="warnbox"><span>ℹ</span><div>
+      <b>Чому тут немає температури процесора.</b> ${esc(d.cpu_note||"")}
+      Програми на кшталт HWiNFO чи LibreHardwareMonitor показують її саме
+      тому, що ставлять власний драйвер рівня ядра.</div></div>
+    <div style="margin-top:10px"><b style="font-size:13px">Джерела</b>${src}</div>
+  </div>`;
+}
+
+function toggleTemps(){ state.tempsOpen=!state.tempsOpen;
+  try{ localStorage.setItem("pcmon.tempsOpen", state.tempsOpen?"1":""); }catch(e){}
+  renderTemps(); }
+try{ state.tempsOpen = !!localStorage.getItem("pcmon.tempsOpen"); }catch(e){}
+window.loadTemps=loadTemps; window.toggleTemps=toggleTemps;
+
+function renderHub(){
+  // короткий підсумок по кожному інструменту прямо на картках
+  const h=state.health, l=state.latData, c=state.clipData;
+  const el=id=>$(id);
+  if(h&&h.score!=null){
+    const bad=Object.values(h.results||{}).filter(r=>r.status==="bad").length;
+    const warn=Object.values(h.results||{}).filter(r=>r.status==="warn").length;
+    el("#st-scan").innerHTML=`<b style="color:${h.score>=85?"var(--acc)":h.score>=60?"var(--org)":"var(--red)"}">${h.score}/100</b>`+
+      (bad||warn?` · ${bad?`${bad} проблем`:""}${bad&&warn?", ":""}${warn?`${warn} попереджень`:""}`:" · усе гаразд");
+  }
+  if(l&&l.result&&!l.result.error){
+    const r=l.result;
+    el("#st-lat").innerHTML=`<b style="color:${r.level==="good"?"var(--acc)":r.level==="warn"?"var(--org)":"var(--red)"}">${esc(r.verdict)}</b>`+
+      ` · найгірша ${us(r.max_us)}`;
+  }
+  if(c&&c.check){
+    const st=c.check.status;
+    el("#st-clip").innerHTML=`<b style="color:${st==="ok"?"var(--acc)":st==="warn"?"var(--org)":"var(--red)"}">`+
+      `${c.open_ms_worst!=null?c.open_ms_worst.toFixed(0)+" мс":"—"}</b>`+
+      ` · стежить програм: ${(c.watchers||[]).length}`;
+  }
+  // загальний рядок
+  const parts=[];
+  if(h&&h.score!=null) parts.push({t:`Стан системи: ${h.score}/100`,
+    c:h.score>=85?"ok":h.score>=60?"warn":"bad"});
+  if(l&&l.result&&!l.result.error) parts.push({t:`Затримки: ${l.result.verdict}`,
+    c:l.result.level==="good"?"ok":l.result.level});
+  if(c&&c.check) parts.push({t:`Буфер: ${c.check.status==="ok"?"нормально":"є зауваження"}`,
+    c:c.check.status==="ok"?"ok":c.check.status});
+  const sum=$("#hub-summary");
+  if(parts.length){ sum.style.display="block";
+    sum.innerHTML=`<div class="sumline">${parts.map(p=>
+      `<span class="pill ${p.c}">${esc(p.t)}</span>`).join("")}
+      <span class="muted" style="font-size:12.5px">останні результати цього сеансу</span></div>`;
+  } else sum.style.display="none";
+}
+
+const SICON={ok:"✓",warn:"!",bad:"✕",info:"i",skip:"–"};
+async function loadHealth(){
+  let d; try{ d=await api("/api/health"); }catch(e){ return; }
+  state.health=d;
+  renderHealth(d);
+}
+// Рендер винесено окремо від завантаження навмисно: так його можна
+// перевірити на заданих даних, не чекаючи справжнього сканування.
+function renderHealth(d){
+  const prog=$("#h-progress");
+  if(d.running){
+    prog.style.display="block";
+    $("#h-bar").style.width=(d.progress*100).toFixed(0)+"%";
+    $("#h-cur").textContent=`${d.completed} з ${d.total} · зараз: ${d.current_title||"…"}`;
+    ["#h-quick","#h-full","#h-deep"].forEach(s=>$(s).disabled=true);
+  } else {
+    prog.style.display="none";
+    ["#h-quick","#h-full","#h-deep"].forEach(s=>$(s).disabled=false);
+  }
+  // оцінка
+  const sc=d.score;
+  // результати переживають перезапуск монітора — чесно кажемо, коли це було
+  let age="";
+  if(!d.running&&d.finished_at){
+    const h=(Date.now()/1000-d.finished_at)/3600;
+    if(h>=1) age=`<span class="muted" style="font-size:12px;margin-left:8px">перевірено ${
+      h<24?Math.round(h)+" год":Math.round(h/24)+" дн"} тому</span>`;
+  }
+  dom("h-score").innerHTML = sc==null ? "" :
+    `<span class="scorebig" style="color:${sc>=85?"var(--acc)":sc>=60?"var(--org)":"var(--red)"}">${sc}</span>
+     <span class="muted" style="font-size:13px">зі 100</span>${age}`;
+  const bad=Object.values(d.results||{}).filter(r=>r.status==="bad").length;
+  const warn=Object.values(d.results||{}).filter(r=>r.status==="warn").length;
+  $("#tb-health").textContent=(bad+warn)||"";
+  if(!state.tool) renderHub();
+
+  const order={bad:0,warn:1,info:2,ok:3,skip:4};
+  const list=Object.values(d.results||{}).sort((a,b)=>
+    (order[a.status]??9)-(order[b.status]??9));
+  if(!list.length){
+    dom("h-results").innerHTML=d.running?"":
+      '<div class="empty">Ще не перевіряли. Почни зі «Швидкої перевірки».</div>';
+    return;
+  }
+  // Розгорнутість зберігаємо в стані, а не лише в DOM: під час перевірки
+  // список перемальовується щопівтори секунди, і без цього розділ, який
+  // людина щойно розгорнула, згортався б у неї на очах.
+  state.hOpen = state.hOpen || {};
+  const isOpen = r => (state.hOpen[r.key] !== undefined) ? state.hOpen[r.key]
+                    : (r.status==="bad" || r.status==="warn");
+  dom("h-results").innerHTML=list.map((r,i)=>`
+    <div class="hcard s-${r.status}${isOpen(r)?" open":""}">
+      <div class="hhead" onclick="hToggle(this,'${esc(r.key||"")}')">
+        <span class="hdot"></span>
+        <span class="ht">${esc(r.title)}</span>
+        <span class="hd">${esc(r.detail||"")}</span>
+        ${r.items&&r.items.length?`<span class="muted" style="font-size:12px">${r.items.length} п.</span>`:""}
+        <span class="muted" style="font-size:11.5px">${r.took!=null?r.took+" с":""}</span>
+      </div>
+      ${(r.items&&r.items.length)||r.fix?`<div class="hbody">
+        ${(r.items||[]).map(it=>`<div class="hitem s-${it.status||"info"}">
+            <span class="hdot"></span><div><b>${esc(it.name)}</b>
+            <span class="muted"> — ${esc(it.text||"")}</span></div></div>`).join("")}
+        ${r.fix?`<div class="hfix"><b>Що робити:</b>\n${esc(r.fix)}</div>`:""}
+      </div>`:""}
+    </div>`).join("");
+}
+async function startHealth(mode){
+  try{
+    const r=await api("/api/health",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({mode})});
+    if(!r.ok){ toast(esc(r.error)); return; }
+    dom("h-results").innerHTML="";
+    loadHealth();
+  }catch(e){ toast("Помилка: "+esc(e.message)); }
+}
+$("#h-quick").onclick=()=>startHealth("quick");
+$("#h-full").onclick =()=>startHealth("full");
+$("#h-deep").onclick =()=>{
+  if(confirm("Глибока перевірка запускає перевірку цілісності Windows.\n\n"+
+    "Це може тривати до 20 хвилин і помітно навантажить диск.\n"+
+    "Нічого не буде змінено — лише перевірка. Продовжити?")) startHealth("deep");
+};
+
+/* ═══════════ ЗАТРИМКИ ═══════════ */
+function us(v){ return v>=1000 ? (v/1000).toFixed(v>=10000?0:2)+" мс" : Math.round(v)+" мкс"; }
+// хто винен: драйвери чи конкретна програма
+function renderAttribution(r){
+  const a=r.attribution;
+  if(!a||!a.available||!a.spike_windows) return "";
+  const KIND={
+    driver:{t:"Винні драйвери, а не програми",c:"bad",
+      d:"У моменти затримок процесор був зайнятий обслуговуванням драйверів. "+
+        "Закривати застосунки безглуздо — треба шукати пристрій."},
+    process:{t:"Схоже на конкретну програму",c:"warn",
+      d:"У моменти затримок ця програма працювала помітно активніше, ніж у спокої."},
+    overload:{t:"Система просто перевантажена",c:"warn",
+      d:"До процесора стояла велика черга — забагато роботи одночасно."},
+    unclear:{t:"Однозначного винуватця не видно",c:"info",
+      d:"Спробуй довший замір або повтори саме в момент проблеми."},
+  }[a.verdict_kind]||null;
+  const d=a.dpc;
+  let dpcBlock="";
+  if(d&&d.spike&&d.spike.dpc!=null){
+    const row=(lbl,o)=>`<tr><td style="text-align:left">${lbl}</td>
+      <td>${o.dpc!=null?o.dpc.toFixed(2)+"%":"—"}</td>
+      <td>${o.isr!=null?o.isr.toFixed(2)+"%":"—"}</td>
+      <td>${o.queue!=null?o.queue.toFixed(1):"—"}</td></tr>`;
+    dpcBlock=`<div style="margin-bottom:12px">
+      <div style="font-size:12.5px;color:var(--tx2);margin-bottom:6px">
+        Чим був зайнятий процесор (частка часу на драйвери):</div>
+      <table style="font-size:12.5px"><thead><tr>
+        <th style="text-align:left">Коли</th><th>DPC (драйвери)</th>
+        <th>Переривання</th><th>Черга</th></tr></thead><tbody>
+        ${row("<b style='color:var(--org)'>під час затримок</b>",d.spike)}
+        ${row("у спокійні моменти",d.calm)}
+      </tbody></table></div>`;
+  } else if(!a.counters){
+    dpcBlock=`<div class="muted" style="font-size:12.5px;margin-bottom:10px">
+      Лічильники DPC/ISR недоступні — поділ «драйвер проти програми» приблизний.</div>`;
+  }
+  const procs=a.processes||[];
+  const procBlock=procs.length?`<div>
+    <div style="font-size:12.5px;color:var(--tx2);margin-bottom:6px">
+      Процеси, активніші саме в моменти затримок (у ядрах):</div>
+    <table style="font-size:12.5px"><thead><tr>
+      <th style="text-align:left">Процес</th><th>під час затримок</th>
+      <th>у спокої</th><th>різниця</th></tr></thead><tbody>
+      ${procs.slice(0,8).map(p=>`<tr>
+        <td style="text-align:left">${esc(p.name)}</td>
+        <td>${p.spike.toFixed(2)}</td><td class="muted">${p.calm.toFixed(2)}</td>
+        <td><b style="color:${p.delta>=0.25?"var(--org)":"var(--tx)"}">+${p.delta.toFixed(2)}</b></td>
+      </tr>`).join("")}</tbody></table></div>`:"";
+  return `<div class="panel" style="margin-top:14px;background:var(--panel2)">
+    <h2>🔍 Хто винен</h2>
+    ${KIND?`<div class="verdict ${KIND.c==="info"?"warn":KIND.c}" style="margin-bottom:12px">
+      <b>${esc(KIND.t)}</b>${esc(KIND.d)}</div>`:""}
+    ${dpcBlock}${procBlock}
+    <div class="muted" style="font-size:11.5px;margin-top:10px">
+      Зіставлено ${a.spike_windows} проміжків із затримками проти ${a.calm_windows} спокійних.
+      Назвати драйвер поіменно без власного драйвера в ядрі неможливо — тому
+      вимикай пристрої по черзі й повторюй замір.</div>
+  </div>`;
+}
+async function loadLatency(){
+  let d; try{ d=await api("/api/latency"); }catch(e){ return; }
+  state.latData=d;
+  const run=d.running;
+  $("#l-progress").style.display=run?"block":"none";
+  $("#l-start").style.display=run?"none":"";
+  $("#l-stop").style.display=run?"":"none";
+  $("#l-sec").disabled=run;
+  if(run){
+    $("#l-bar").style.width=(d.progress*100).toFixed(0)+"%";
+    $("#l-state").textContent=`вимірюю… ${Math.round(d.elapsed)} із ${d.seconds} с`;
+  } else $("#l-state").textContent="";
+  const r=d.result;
+  if(!r){ if(!run) dom("l-result").innerHTML=
+    '<div class="empty">Замір ще не робили.</div>'; return; }
+  if(r.error){ dom("l-result").innerHTML=`<div class="empty">${esc(r.error)}</div>`; return; }
+  // логарифмічна шкала: інакше стовпчик із десятками тисяч замірів
+  // розчавлює всі інші, а цікаві саме рідкісні великі затримки
+  const lg=n=>n>0?Math.log10(n+1):0;
+  const mx=Math.max(...r.hist.map(h=>lg(h.n)),1);
+  dom("l-result").innerHTML=`
+    <div class="verdict ${r.level}"><b>${esc(r.verdict)}</b>${esc(r.summary)}</div>
+    <div class="lat-grid">
+      ${[["Найгірша",us(r.max_us),r.max_us>=2000?"var(--red)":r.max_us>=1000?"var(--org)":"var(--acc)"],
+         ["Типова (p50)",us(r.p50_us),""],["p95",us(r.p95_us),""],["p99",us(r.p99_us),""],
+         ["Середня",us(r.avg_us),""],["Замірів",r.samples.toLocaleString("uk"),""]]
+        .map(([t,v,c])=>`<div class="lat-cell"><div class="t">${t}</div>
+          <div class="v"${c?` style="color:${c}"`:""}>${v}</div></div>`).join("")}
+    </div>
+    <div style="font-size:12.5px;color:var(--tx2);margin-bottom:6px">Розподіл затримок:</div>
+    <div style="display:flex;align-items:flex-end;gap:4px;height:70px;margin-bottom:12px">
+      ${r.hist.map(h=>{const pc=lg(h.n)/mx*100;
+        const lbl=h.to==null?"10мс+":(h.to<1000?h.to+"мкс":(h.to/1000)+"мс");
+        const col=h.from>=2000?"var(--red)":h.from>=1000?"var(--org)":"var(--acc)";
+        return `<div style="flex:1;text-align:center" title="${h.n} замірів">
+          <div style="height:52px;display:flex;align-items:flex-end">
+            <div style="width:100%;height:${Math.max(h.n?3:0,pc)}%;background:${col};
+              opacity:.75;border-radius:3px 3px 0 0"></div></div>
+          <div style="font-size:9.5px;color:var(--tx2);margin-top:3px">${lbl}</div></div>`}).join("")}
+    </div>
+    <div style="font-size:12.5px;color:var(--tx2)">
+      Перевищень: понад 1 мс — <b style="color:var(--tx)">${r.over["1000"]}</b>,
+      понад 2 мс — <b style="color:var(--tx)">${r.over["2000"]}</b>,
+      понад 10 мс — <b style="color:var(--tx)">${r.over["10000"]}</b>
+      ${r.spike_count?` · зафіксовано шпичок: <b style="color:var(--tx)">${r.spike_count}</b>`:""}
+    </div>
+    ${renderAttribution(r)}
+    ${r.hints&&r.hints.length?`<div class="hfix" style="margin-top:12px"><b>Що з цим робити:</b>
+      <ul style="margin:6px 0 0 17px">${r.hints.map(h=>`<li style="margin-bottom:4px">${esc(h)}</li>`).join("")}</ul></div>`:""}`;
+}
+$("#l-start").onclick=async()=>{
+  await api("/api/latency",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({action:"start",seconds:+$("#l-sec").value})});
+  dom("l-result").innerHTML=""; loadLatency();
+};
+$("#l-stop").onclick=async()=>{
+  await api("/api/latency",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({action:"stop"})});
+};
+
+/* ═══════════ БУФЕР ОБМІНУ ═══════════ */
+async function checkClipboard(){
+  $("#c-state").textContent="перевіряю…";
+  $("#c-check").disabled=true;
+  let d;
+  try{
+    // Свій ліміт часу з боку сторінки. Без нього заблокований буфер обривав
+    // з'єднання, і користувач бачив лише «Failed to fetch» — повідомлення,
+    // яке нічого не пояснює. Сервер має власний ліміт (10 / 25 с із заміром
+    // розміру), тож наш беремо трохи більший, щоб перевагу мала його відповідь.
+    const ctl=new AbortController();
+    const to=setTimeout(()=>ctl.abort(), $("#c-sizes").checked?30000:15000);
+    const r=await fetch("/api/clipboard"+($("#c-sizes").checked?"?sizes=1":""),
+                        {signal:ctl.signal});
+    clearTimeout(to);
+    if(!r.ok) throw new Error("сервер відповів "+r.status);
+    d=await r.json();
+  }
+  catch(e){
+    $("#c-state").textContent=""; $("#c-check").disabled=false;
+    const busy = e.name==="AbortError" || /failed to fetch|network/i.test(e.message||"");
+    dom("c-result").innerHTML=`<div class="warnbox"><span>⚠</span><div>`+(busy
+      ? `<b>Буфер обміну зараз заблокований.</b> Перевірка не змогла до нього
+         достукатися — саме тому копіювання й гальмує. Це не помилка монітора,
+         це і є симптом. Зачекай кілька секунд і натисни ще раз; якщо повторюється
+         постійно — винуватець майже напевно у списку «стежать за буфером» нижче.`
+      : `Помилка: ${esc(e.message)}`)+`</div></div>`;
+    return;
+  }
+  $("#c-state").textContent=""; $("#c-check").disabled=false;
+  state.clipData=d;
+  if(d.timed_out){
+    dom("c-result").innerHTML=`<div class="warnbox"><span>⚠</span><div>
+      <b>Буфер не відповів за ${d.limit_s} с.</b>
+      ${d.holder?`Тримає його: <b>${esc(d.holder)}</b>.`:""}
+      Це і є те гальмо, яке ти ловиш — перевірка впіймала його «на гарячому».
+      Спробуй ще раз через кілька секунд.</div></div>`;
+    return;
+  }
+  if(d.supported===false){
+    dom("c-result").innerHTML=`<div class="empty">${esc(d.reason||d.error||"недоступно")}</div>`;
+    return;
+  }
+  const c=d.check||{};
+  const lvl=c.status==="bad"?"bad":c.status==="warn"?"warn":"good";
+  const best=d.open_ms_best, worst=d.open_ms_worst;
+  const fmts=d.formats||[], watchers=d.watchers||[];
+  const imgs=fmts.filter(f=>f.kind==="image");
+  const mb=(d.bytes||0)/1048576;
+
+  let head;
+  if(d.hung||d.blocker){
+    const b=d.blocker||{};
+    head=`<b>Буфер тримає інша програма</b>
+      ${esc(b.name||"невідома програма")}${b.pid?` (PID ${b.pid})`:""}${
+      b.title?` — вікно «${esc(b.title)}»`:
+      (b.background?' — <b>працює у фоні, вікна немає</b>':"")}.
+      Поки вона його не відпустить, копіювання й вставка не працюватимуть ні в чому.
+      ${b.pid?`<div style="margin-top:10px;display:flex;gap:8px">
+        <button class="btn small" onclick="killProc(${b.pid},'${esc(b.name||"")}')">✕ Завершити процес</button>
+        <button class="btn small" onclick="openProc('${esc(b.name||"")}')">Деталі</button>
+      </div>`:""}`;
+  } else if(worst>=200){
+    head=`<b>Дуже повільний доступ</b>Звернення до буфера триває до ${worst.toFixed(0)} мс —
+      це і є та затримка, яку ти відчуваєш.`;
+  } else if(worst>=50){
+    head=`<b>Помітна затримка</b>До ${worst.toFixed(0)} мс на звернення. З великими
+      картинками буде відчутно.`;
+  } else {
+    head=`<b>Буфер відповідає швидко</b>${best!=null?`${best.toFixed(1)}–${worst.toFixed(1)} мс`:""}
+      — сам по собі він не гальмує${watchers.length?", але подивись на список нижче":""}.`;
+  }
+
+  dom("c-result").innerHTML=`
+    <div class="verdict ${lvl}">${head}</div>
+    <div class="lat-grid">
+      ${[["Доступ",best!=null?`${best.toFixed(1)} мс`:"—",
+          worst>=200?"var(--red)":worst>=50?"var(--org)":"var(--acc)"],
+         ["Найгірше",worst!=null?`${worst.toFixed(1)} мс`:"—",""],
+         ["У буфері",fmts.length?`${fmts.length} форм.`:"порожньо",""],
+         ["Розмір",d.bytes?(mb>=1?mb.toFixed(1)+" МБ":Math.round(d.bytes/1024)+" КБ"):"не мір.",
+          mb>=20?"var(--org)":""],
+         ["Стежить",watchers.length||"0",watchers.length>=3?"var(--org)":""],
+        ].map(([t,v,c2])=>`<div class="lat-cell"><div class="t">${t}</div>
+          <div class="v"${c2?` style="color:${c2}"`:""}>${v}</div></div>`).join("")}
+    </div>
+
+    ${d.owner&&d.owner.name?`<div style="font-size:12.5px;color:var(--tx2);margin-bottom:10px">
+      Останньою копіювала: <b style="color:var(--tx)">${esc(d.owner.name)}</b>
+      ${d.owner.title?` — «${esc(d.owner.title)}»`:""}</div>`:""}
+
+    ${fmts.length?`<div style="margin-bottom:12px">
+      <div style="font-size:12.5px;color:var(--tx2);margin-bottom:6px">
+        Що зараз у буфері${imgs.length?" (є зображення)":""}:</div>
+      <div class="chips">${fmts.map(f=>`<span class="chip"${f.kind==="image"?
+        ' style="border-color:#3a4a6a"':""}><b>${esc(f.name)}</b>${
+        f.size?` · ${f.size>1048576?(f.size/1048576).toFixed(1)+" МБ":Math.round(f.size/1024)+" КБ"}`:""}
+        </span>`).join("")}</div></div>`:""}
+
+    ${watchers.length?`<div style="margin-bottom:12px">
+      <div style="font-size:12.5px;color:var(--tx2);margin-bottom:7px">
+        Програми, які стежать за буфером — кожна отримує сповіщення на кожне копіювання:</div>
+      ${watchers.map(w=>`<div class="hitem s-${w.level==="high"?"warn":"info"}">
+        <span class="hdot"></span><div style="flex:1"><b>${esc(w.title)}</b>
+        <span class="muted"> — ${esc(w.why)}</span>
+        ${w.level==="high"?' <span class="tag sus">найімовірніша причина</span>':""}
+        <div style="margin-top:5px;display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn small" onclick="openProc('${esc(w.name)}')">Деталі</button>
+          ${(w.pids||[]).map(pid=>`<button class="btn small"
+            onclick="killProc(${pid},'${esc(w.name)}')">✕ ${pid}</button>`).join("")}
+        </div></div></div>`).join("")}</div>`:
+      '<div class="muted" style="font-size:12.5px;margin-bottom:10px">Відомих програм-слухачів буфера не знайдено.</div>'}
+
+    ${c.fix?`<div class="hfix"><b>Що робити:</b>\n${esc(c.fix)}</div>`:""}
+    ${renderClipLog(d.log)}`;
+}
+// журнал змін буфера — саме тут видно зірване копіювання
+function renderClipLog(lg){
+  if(!lg) return `<div class="muted" style="font-size:12.5px;margin-top:14px">
+    Постійне спостереження вимкнено або недоступне.</div>`;
+  const ev=lg.events||[];
+  if(!ev.length) return `<div class="muted" style="font-size:12.5px;margin-top:14px">
+    Спостереження працює, але змін буфера ще не було. Скопіюй щось — і тут
+    з'явиться запис.</div>`;
+  return `<div style="margin-top:16px">
+    <div style="font-size:12.5px;color:var(--tx2);margin-bottom:7px">
+      Журнал копіювань (${lg.total})${lg.problems?
+        ` · <b style="color:var(--org)">зі збоями: ${lg.problems}</b>`:
+        " · збоїв не було"}:</div>
+    <div class="events-list" style="max-height:300px">
+    ${ev.map(e=>{
+      const t=new Date(e.ts*1000);
+      const hh=String(t.getHours()).padStart(2,"0")+":"+String(t.getMinutes()).padStart(2,"0")
+        +":"+String(t.getSeconds()).padStart(2,"0");
+      const sz=e.bytes?(e.bytes>1048576?(e.bytes/1048576).toFixed(1)+" МБ":
+        Math.round(e.bytes/1024)+" КБ"):"";
+      return `<div class="ev"${e.problem?' style="background:#241d12"':""}>
+        <span class="t">${hh}</span>
+        <span class="k">${e.problem?"⚠":e.has_image?"🖼":"📄"}</span>
+        <span style="min-width:150px"><b>${esc(e.owner||"невідомо")}</b></span>
+        <span class="info" style="flex:1">
+          ${e.problem?`<b style="color:var(--org)">${esc(e.problem)}</b>`:
+            `${e.n_formats} форм.${sz?" · "+sz:""}${e.open_ms!=null?` · ${e.open_ms.toFixed(0)} мс`:""}`}
+          ${e.held_by?` · тримав: ${esc(e.held_by)}`:""}
+        </span></div>`}).join("")}
+    </div>
+    <div class="muted" style="font-size:11.5px;margin-top:8px">
+      Кожен рядок — одна зміна буфера. Якщо копіювання зривається, тут буде
+      запис із поясненням: буфер лишився порожнім, його хтось тримав, або
+      джерело не віддало дані.</div>
+  </div>`;
+}
+$("#c-check").onclick=checkClipboard;
+
+/* ═══════════ ПОШУК ДРАЙВЕРА (DPC/ISR) ═══════════ */
+async function loadDpc(){
+  let d; try{ d=await api("/api/dpcisr"); }catch(e){ return; }
+  const run=d.running;
+  state.dpcRunning=run;
+  $("#d-progress").style.display=run?"block":"none";
+  $("#d-start").disabled=run;
+  $("#d-sec").disabled=run;
+  $("#d-test").disabled=run;
+  $("#d-cancel").style.display=run?"":"none";
+  if(run){
+    $("#d-bar").style.width=(d.progress*100).toFixed(0)+"%";
+    $("#d-stage").textContent=d.stage||"";
+    $("#d-state").textContent="виконується…";
+  } else $("#d-state").textContent="";
+
+  const box=dom("d-result");   // не чіпає DOM, якщо розмітка та сама
+  if(d.never_run){
+    // показуємо коротку довідку ЛИШЕ якщо там ще нічого немає —
+    // щоб не затирати результат перевірки можливостей
+    if(!box.innerHTML.trim()){
+      const t=d.tools||{};
+      box.innerHTML=`<div class="muted" style="font-size:12.5px">
+        ${d.admin===false?'<b style="color:var(--org)">Потрібні права адміністратора.</b> ':""}
+        Драйверів у пам'яті: <b style="color:var(--tx)">${d.modules||0}</b>.
+        Інструменти: logman ${t.logman?"✓":"✕"}, tracerpt ${t.tracerpt?"✓":"✕"},
+        wpr ${t.wpr?"✓":"✕"}, xperf ${t.xperf?"✓ (найточніший)":"✕ (не обов'язковий)"}.</div>`;
+    }
+    return;
+  }
+  if(d.error && !run){
+    box.innerHTML=`<div class="verdict warn"><b>Не вдалося</b>${esc(d.error)}</div>
+      ${renderDiag(d.diag)}`;
+    return;
+  }
+  const r=d.result;
+  if(!r){ if(!run) box.innerHTML=""; return; }
+  const drv=r.drivers||[];
+  const maxv=Math.max(1,...drv.map(x=>x.usec||x.total||0));
+  box.innerHTML=`
+    <div class="verdict ${drv.length?"warn":"good"}">
+      <b>Розклад по драйверах</b>
+      За ${r.seconds} с зібрано трасу (${r.etl_mb} МБ), впізнано ${r.modules} драйверів.
+      Спосіб розбору: ${esc(r.source)}.
+    </div>
+    <table style="font-size:12.5px"><thead><tr>
+      <th style="text-align:left">Драйвер</th><th>DPC</th><th>ISR</th>
+      <th>Разом часу</th><th>Найдовший</th><th style="width:130px"></th>
+    </tr></thead><tbody>
+      ${drv.slice(0,20).map(x=>{
+        const v=x.usec||x.total||0, pc=v/maxv*100;
+        return `<tr>
+          <td style="text-align:left"><b>${esc(x.driver)}</b></td>
+          <td>${x.dpc_count||"—"}</td><td>${x.isr_count||"—"}</td>
+          <td>${x.usec?(x.usec>=1000?(x.usec/1000).toFixed(1)+" мс":x.usec.toFixed(0)+" мкс"):"—"}</td>
+          <td>${x.max_us?x.max_us.toFixed(0)+" мкс":"—"}</td>
+          <td><div class="cpubar-wrap" style="max-width:none"><div class="cpubar${pc>60?" hot":""}"
+            style="width:${pc}%"></div></div></td>
+        </tr>`}).join("")}
+    </tbody></table>
+    ${r.hints&&r.hints.length?`<div class="hfix" style="margin-top:12px"><b>Що це означає:</b>
+      <ul style="margin:6px 0 0 17px">${r.hints.map(h=>`<li style="margin-bottom:4px">${esc(h)}</li>`).join("")}</ul></div>`:""}
+    ${renderDiag(d.diag)}`;
+}
+function renderDiag(diag){
+  if(!diag||!diag.length) return "";
+  // запам'ятовуємо, чи блок розгорнутий: без цього будь-яке перемальовування
+  // згортало його назад, і прочитати подробиці було неможливо
+  return `<details style="margin-top:12px"${state.diagOpen?" open":""}
+      ontoggle="state.diagOpen=this.open"><summary class="muted"
+      style="cursor:pointer;font-size:12.5px">Технічні подробиці (для налагодження)</summary>
+    <div class="events-list" style="max-height:220px;margin-top:8px">
+    ${diag.map(x=>`<div class="ev"><span style="min-width:190px"><b>${esc(x.stage)}</b></span>
+      <span class="info" style="flex:1">${esc(x.detail||"")}</span></div>`).join("")}
+    </div></details>`;
+}
+$("#d-start").onclick=async()=>{
+  const r=await api("/api/dpcisr",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({action:"start",seconds:+$("#d-sec").value})});
+  if(!r.ok){ toast(esc(r.error||"")); return; }
+  state.dpcRunning=true;
+  dom("d-result").innerHTML=""; dom("d-test-result").innerHTML=""; loadDpc();
+};
+$("#d-cancel").onclick=async()=>{
+  await api("/api/dpcisr",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({action:"cancel"})});
+  toast("Скасовую й прибираю за собою…",4000);
+};
+$("#d-test").onclick=async()=>{
+  $("#d-test").disabled=true; $("#d-state").textContent="перевіряю…";
+  let r;
+  try{ r=await api("/api/dpcisr",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({action:"selftest"})}); }
+  catch(e){ toast("Помилка: "+esc(e.message)); }
+  $("#d-test").disabled=false; $("#d-state").textContent="";
+  if(!r) return;
+  const t=r.tools||{};
+  dom("d-test-result").innerHTML=`
+    <div class="verdict ${r.ok?"good":"bad"}">
+      <b>${r.ok?"Усе працює — можна шукати драйвер":"Трасування недоступне"}</b>
+      ${r.ok?`Розбір буде через <b>${esc(r.parser||"?")}</b>. Драйверів у пам'яті: ${r.modules}.`
+            :esc(r.error||"причина в кроках нижче")}
+      ${r.parse_warning?"<br>Попередження: подій DPC/ISR у розібраній трасі не видно. "+
+        "Для точного результату варто встановити Windows Performance Toolkit (з Windows ADK) — "+
+        "тоді з'явиться xperf.exe і монітор автоматично почне користуватись ним.":""}
+    </div>
+    <div style="font-size:12.5px;color:var(--tx2);margin-bottom:8px">
+      Права адміністратора: <b style="color:${r.admin?"var(--acc)":"var(--red)"}">${r.admin?"є":"немає"}</b>
+      · logman ${t.logman?"✓":"✕"} · tracerpt ${t.tracerpt?"✓":"✕"}
+      · wpr ${t.wpr?"✓":"✕"} · xperf ${t.xperf?"✓":"✕ (не обов'язковий)"}</div>
+    ${renderDiag(r.steps)}`;
+};
+
+/* ═══════════ НАЛАШТУВАННЯ ═══════════ */
+function swHtml(id,on,attrs=""){ return `<div class="sw${on?" on":""}" id="${id}" ${attrs}></div>`; }
+async function loadSettings(){
+  let d; try{ d=await api("/api/settings"); }catch(e){
+    dom("cfg-body").innerHTML='<div class="panel"><div class="empty">Немає зв\'язку зі збирачем</div></div>';
+    return; }
+  state.cfg=d;
+  const c=d.config, a=d.autostart;
+  const daysWord=n=>n===1?"день":(n>=2&&n<=4?"дні":"днів");
+  dom("cfg-body").innerHTML=`
+    ${state.needsRestart?`<div class="needs-restart">
+      <span>⟳</span><div style="flex:1">Частина змін застосується після перезапуску збору.</div>
+      <button class="btn small" onclick="doRestart()">Перезапустити зараз</button></div>`:""}
+
+    <div class="panel cfg-sec"><h2>Запуск</h2>
+      <div class="cfg-row"><div class="lbl"><b>Запускати разом із Windows</b>
+        <span>${a.supported?(d.admin?"Стартує у фоні одразу з правами адміністратора — без запиту UAC і без вікна консолі."
+          :"Щоб змінити, потрібні права адміністратора: запусти install.bat"):esc(a.reason||"недоступно")}</span></div>
+        <div class="ctl">${swHtml("sw-auto",a.enabled,(!a.supported||!d.admin)?'style="opacity:.4;pointer-events:none"':"")}</div></div>
+      <div class="cfg-row"><div class="lbl"><b>Значок завжди в треї</b>
+        <span>${d.tray&&d.tray.supported
+          ?"Закріпити значок на панелі задач, щоб він не ховався в «шухляду» за стрілкою. Те саме, що перемкнути його в Параметрах Windows."
+          :esc((d.tray&&d.tray.reason)||"недоступно")}</span></div>
+        <div class="ctl">${d.tray&&d.tray.supported?swHtml("sw-tray",d.tray.pinned):""}</div></div>
+      <div class="cfg-row"><div class="lbl"><b>Перезапустити збір</b>
+        <span>Потрібно, щоб застосувати налаштування нижче</span></div>
+        <div class="ctl"><button class="btn small" onclick="doRestart()">⟳ Перезапустити</button></div></div>
+    </div>
+
+    <div class="panel cfg-sec"><h2>Збір даних</h2>
+      <div class="cfg-row"><div class="lbl"><b>Як часто опитувати процеси</b>
+        <span>Менше значення — детальніша картина, але більше навантаження.
+        Зараз одне опитування триває ${d.scan_ms} мс.</span></div>
+        <div class="ctl"><input type="number" id="i-sample" min="1" max="60" value="${c.sample_interval}"> <span class="muted">с</span></div></div>
+      <div class="cfg-row"><div class="lbl"><b>Точна мережа по програмах (ETW)</b>
+        <span>Скільки байтів надіслала кожна програма і які домени запитувала.
+        Потребує прав адміністратора. Стан: ${esc(d.etw)}</span></div>
+        <div class="ctl">${swHtml("sw-etw",c.etw_enabled)}</div></div>
+      <div class="cfg-row"><div class="lbl"><b>Завантаження відеокарти</b>
+        <span>Бере з тих самих лічильників, що й Диспетчер задач. Стан: ${esc(d.gpu)}</span></div>
+        <div class="ctl">${swHtml("sw-gpu",c.gpu_enabled)}</div></div>
+      <div class="cfg-row"><div class="lbl"><b>Як рахувати пам'ять</b>
+        <span>«Як у Диспетчері» — точно, але трохи дорожче. «Швидко» — дешевше,
+        цифри трохи вищі. Зараз: ${esc(d.mem_mode)}</span></div>
+        <div class="ctl"><select id="i-mem">
+          <option value="auto"${c.memory_metric==="auto"?" selected":""}>Як у Диспетчері</option>
+          <option value="private"${c.memory_metric==="private"?" selected":""}>Швидко</option>
+          <option value="rss"${c.memory_metric==="rss"?" selected":""}>Робочий набір</option>
+        </select></div></div>
+    </div>
+
+    <div class="panel cfg-sec"><h2>Приватність</h2>
+      <div class="cfg-row"><div class="lbl"><b>Записувати командні рядки програм</b>
+        <span>Корисно для розслідування, але в аргументах інколи бувають паролі
+        чи токени. За замовчуванням вимкнено.</span></div>
+        <div class="ctl">${swHtml("sw-cmd",c.log_cmdline)}</div></div>
+      <div class="cfg-row"><div class="lbl"><b>Перевіряти цифровий підпис</b>
+        <span>Допомагає відрізнити справжню програму від підробки</span></div>
+        <div class="ctl">${swHtml("sw-sig",c.sig_check)}</div></div>
+      <div class="cfg-row"><div class="lbl"><b>Рахувати SHA-256 нових програм</b>
+        <span>Щоб можна було перевірити файл на VirusTotal</span></div>
+        <div class="ctl">${swHtml("sw-hash",c.hash_new_exes)}</div></div>
+    </div>
+
+    <div class="panel cfg-sec"><h2>Stream Deck</h2>
+      <div class="cfg-row"><div class="lbl"><b>Показники на клавішах</b>
+        <span>Процесор, пік ядра, пам'ять, GPU, мережа, диск — із міні-графіком
+        за останні хвилини. Порт <b>${c.dashboard_port}</b> підставиться в плагін
+        автоматично. Плагін лише читає числа: він нічим не керує й нічого
+        не змінює.</span></div>
+        <div class="ctl"><button class="btn small" onclick="installSD()">Встановити</button></div></div>
+      <div id="sd-res"></div>
+    </div>
+
+    <div class="panel cfg-sec"><h2>Командний рядок</h2>
+      <div class="cfg-row"><div class="lbl"><b>Дозволити виконання команд</b>
+        <span>Вимкнено за замовчуванням. Команди виконуються від
+        <i style="font-style:normal;color:var(--tx);font-weight:600">звичайного
+        користувача</i>, навіть коли монітор запущено від адміністратора.
+        Якщо знизити права не вдасться — команда не виконається взагалі,
+        а не піде з зайвими правами.</span></div>
+        <div class="ctl">${swHtml("sw-cmds",c.allow_commands)}</div></div>
+      ${c.allow_commands?`
+      <div class="cfg-row"><div class="lbl"><b>Перевірити рівень прав</b>
+        <span>Запитає саму Windows, з якими правами насправді виконуються
+        команди — щоб це не лишалось обіцянкою на слово.</span></div>
+        <div class="ctl"><button class="btn small" onclick="probeRights()">Перевірити</button></div></div>
+      <div id="rights-res"></div>
+      <div class="muted" style="font-size:12.5px;margin-top:8px">
+        Сам термінал — на вкладці
+        <a href="#" onclick="setTab('now');return false" style="color:var(--blue)">«Зараз»</a>,
+        поруч із живими показниками.</div>`:""}
+    </div>
+
+    <div class="panel cfg-sec"><h2>Безпека</h2>
+      <div class="cfg-row"><div class="lbl"><b>Чутливість до підозрілого</b>
+        <span>Нижчий поріг — більше попереджень, зокрема хибних</span></div>
+        <div class="ctl"><select id="i-susp">
+          <option value="20"${c.suspicion.suspicion_min_score==20?" selected":""}>Висока (20)</option>
+          <option value="35"${c.suspicion.suspicion_min_score==35?" selected":""}>Звичайна (35)</option>
+          <option value="60"${c.suspicion.suspicion_min_score==60?" selected":""}>Тільки явне (60)</option>
+        </select></div></div>
+      <div class="cfg-row"><div class="lbl"><b>Довірені програми (${d.trusted.length})</b>
+        <span>${d.trusted.length?d.trusted.map(t=>esc(t.name)).join(", "):"поки порожньо"}</span></div>
+        <div class="ctl">${d.trusted.length?`<button class="btn small" onclick="clearTrust()">Очистити</button>`:""}</div></div>
+      <div class="cfg-row"><div class="lbl"><b>Детальне стеження (${d.watch.length})</b>
+        <span>${d.watch.length?d.watch.map(esc).join(", "):"нема"}</span></div>
+        <div class="ctl">${d.watch.length?`<button class="btn small" onclick="clearWatch()">Вимкнути все</button>`:""}</div></div>
+    </div>
+
+    <div class="panel cfg-sec"><h2>Історія та місце</h2>
+      <div class="cfg-row"><div class="lbl"><b>Детальна історія по хвилинах</b>
+        <span>Скільки днів тримати похвилинні графіки</span></div>
+        <div class="ctl"><input type="number" id="i-rmin" min="1" max="365" value="${c.retention_minutes_days}"> <span class="muted">дн.</span></div></div>
+      <div class="cfg-row"><div class="lbl"><b>Денні підсумки та події</b>
+        <span>Зберігаються значно довше, бо займають мало місця</span></div>
+        <div class="ctl"><input type="number" id="i-rday" min="1" max="3650" value="${c.retention_days}"> <span class="muted">дн.</span></div></div>
+      <div class="cfg-row"><div class="lbl"><b>База даних</b>
+        <span>${fb(d.db_size)} · зібрано за ${d.days_collected} ${daysWord(d.days_collected)}</span></div>
+        <div class="ctl"><button class="btn small" onclick="doVacuum()">Стиснути</button>
+          <button class="btn small" onclick="doPurge()">Очистити історію</button></div></div>
+      <div class="cfg-row"><div class="lbl"><b>Загальний звіт для аналізу</b>
+        <span>Один файл із усім: стан системи, зведення по програмах, результати
+        перевірок, мережа, нові програми і журнал роботи монітора. Саме його
+        зручно надсилати мені на розбір.</span></div>
+        <div class="ctl"><button class="btn small" onclick="doExportAll()">📤 Зібрати звіт</button></div></div>
+      <div class="cfg-row"><div class="lbl"><b>Папки</b>
+        <span>${esc(d.base_dir)}</span></div>
+        <div class="ctl"><button class="btn small" onclick="openFolder('base')">Програма</button>
+          <button class="btn small" onclick="openFolder('exports')">Експорти</button>
+          <button class="btn small" onclick="openFolder('logs')">Логи</button></div></div>
+    </div>
+
+    <div class="panel cfg-sec"><h2>Про програму</h2>
+      <div class="cfg-row"><div class="lbl">
+        <b>PC Monitor ${esc(d.version)}</b>
+        <span>Python ${esc(d.python)} · права адміністратора: ${d.admin?"є":"нема"}<br>
+        Усі дані лишаються на цьому комп'ютері. Нічого нікуди не надсилається.</span></div></div>
+      <div class="cfg-row"><div class="lbl"><b>Оновлення</b>
+        <span>Локальні і безпечні: збери нову версію через <b>build.bat</b> —
+        готовий інсталятор потрапить у папку <b>updates</b>, і його можна
+        поставити звідси одним кліком. З інтернету нічого не завантажується.</span></div>
+        <div class="ctl"><button class="btn small" onclick="checkUpdate()">Перевірити</button></div></div>
+      <div id="upd-res"></div>
+    </div>`;
+
+  // перемикачі
+  const t=(id,key)=>{ const el=$("#"+id); if(!el) return;
+    el.onclick=async()=>{ const on=!el.classList.contains("on");
+      el.classList.add("busy");
+      if(key==="autostart"){
+        const r=await api("/api/autostart",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({on})});
+        el.classList.remove("busy");
+        if(!r.ok){ toast("Не вдалося: "+esc(r.error||"")); return; }
+        toast(on?"✓ Монітор стартуватиме разом із Windows":"Автозапуск вимкнено");
+        loadSettings(); return;
+      }
+      if(key==="traypin"){
+        const r=await api("/api/tray",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({pin:on})});
+        el.classList.remove("busy");
+        if(!r.ok){ toast("Не вдалося: "+esc(r.error||"")); return; }
+        el.classList.toggle("on",on);
+        toast(on?"✓ Значок закріплено — тепер він завжди на панелі"
+                :"Значок відкріплено — Windows може сховати його в «шухляду»");
+        return;
+      }
+      el.classList.toggle("on",on); el.classList.remove("busy");
+      saveCfg({[key]:on});
+    };};
+  t("sw-auto","autostart"); t("sw-tray","traypin");
+  t("sw-etw","etw_enabled"); t("sw-gpu","gpu_enabled");
+  t("sw-cmd","log_cmdline"); t("sw-sig","sig_check"); t("sw-hash","hash_new_exes");
+  // вмикання командного рядка одразу перемальовує розділ, щоб з'явилось поле
+  const swc=$("#sw-cmds");
+  if(swc) swc.onclick=async()=>{
+    const on=!swc.classList.contains("on");
+    swc.classList.add("busy");
+    try{ await saveCfg({allow_commands:on}); }
+    finally{ swc.classList.remove("busy"); }
+    state.cmdAllowed=on; updateTermUI();   // панель у «Зараз» — одразу в курсі
+    await loadSettings();
+    if(on) toast("Командний рядок увімкнено — термінал на вкладці «Зараз». "
+                 +"Команди виконуються від звичайного користувача.");
+  };
+  bindTerminal();
+  const bind=(id,key,num)=>{ const el=$("#"+id); if(!el) return;
+    el.onchange=()=>saveCfg({[key]:num?+el.value:el.value}); };
+  bind("i-sample","sample_interval",1); bind("i-mem","memory_metric",0);
+  bind("i-rmin","retention_minutes_days",1); bind("i-rday","retention_days",1);
+  const sp=$("#i-susp");
+  if(sp) sp.onchange=()=>saveCfg({suspicion:{suspicion_min_score:+sp.value}});
+  // розділ перемальовано — повертаємо на місце результати, які людина
+  // вже викликала (встановлення плагіна, перевірка прав)
+  restoreSticky();
+}
+async function installSD(){
+  stick("sd-res",'<div class="muted" style="font-size:12.5px">встановлюю…</div>');
+  let r;
+  try{ r=await api("/api/sd_install",{method:"POST",
+        headers:{"Content-Type":"application/json"},body:"{}"}); }
+  catch(e){ stick("sd-res",`<div class="warnbox"><span>⚠</span><div>${esc(e.message)}</div></div>`);
+    return; }
+  if(!r.ok){ stick("sd-res",`<div class="warnbox"><span>⚠</span><div>${esc(r.error||"")}</div></div>`);
+    return; }
+  stick("sd-res",`<div class="frozenbar">
+    <b>Плагін встановлено.</b> ${esc(r.note||"")}
+    <div class="muted" style="font-size:11.5px;margin-top:5px">${esc(r.path)}</div>
+    <div style="margin-top:6px">Далі: у Stream Deck знайди категорію
+      <b>PC Monitor</b> → перетягни «Показник» на клавішу → у налаштуваннях
+      клавіші обери, що показувати.</div></div>`);
+}
+window.installSD=installSD;
+
+/* ═══════════ КОМАНДНИЙ РЯДОК ═══════════ */
+// Панель живе у «Зараз». Згорнутість — у localStorage; дозвіл приходить із
+// /api/status (state.cmdAllowed), тож панель чесно каже «вимкнено», а не
+// мовчки ховається.
+function toggleTerm(){
+  state.termOpen=!state.termOpen;
+  try{ localStorage.setItem("pcmon.term", state.termOpen?"1":""); }catch(e){}
+  updateTermUI();
+  if(state.termOpen&&state.cmdAllowed){ const i=$("#cmd-input"); if(i) i.focus(); }
+}
+function updateTermUI(){
+  const a=$("#term-arrow"); if(!a) return;
+  const allowed=!!state.cmdAllowed, open=!!state.termOpen;
+  a.textContent=open?"▾":"▸";
+  $("#term-body").style.display=(open&&allowed)?"block":"none";
+  $("#term-off").style.display=(open&&!allowed)?"block":"none";
+  $("#term-note").textContent=allowed?"":"вимкнено";
+}
+try{ state.termOpen=!!localStorage.getItem("pcmon.term"); }catch(e){}
+window.toggleTerm=toggleTerm;
+
+function bindTerminal(){
+  const inp=$("#cmd-input"), btn=$("#cmd-run");
+  if(!inp||!btn) return;
+  // Вивід і введене живуть у стані: розділ налаштувань перемальовується
+  // цілком, і без цього все набране й усі відповіді зникали б.
+  if(state.term) { $("#cmd-out").innerHTML=state.term; $("#cmd-out").scrollTop=1e6; }
+  keepField("cmd-input","cmd");
+  keepField("cmd-admin","cmdAdmin","checked");
+  state.cmdHist=state.cmdHist||[]; let hi=-1;
+  const go=()=>runCommand(inp.value);
+  btn.onclick=go;
+  inp.onkeydown=e=>{
+    if(e.key==="Enter"){ e.preventDefault(); go(); return; }
+    // історія команд стрілками — як у звичайному терміналі
+    if(e.key==="ArrowUp"||e.key==="ArrowDown"){
+      const H=state.cmdHist; if(!H.length) return;
+      e.preventDefault();
+      hi = e.key==="ArrowUp" ? Math.min(hi+1,H.length-1) : Math.max(hi-1,-1);
+      inp.value = hi<0?"":H[hi];
+      inp.setSelectionRange(inp.value.length,inp.value.length);
+    }
+  };
+  // фокус не забираємо: панель може бути згорнута або на іншій вкладці
+}
+async function runCommand(cmd){
+  cmd=(cmd||"").trim(); if(!cmd) return;
+  const out=$("#cmd-out"), inp=$("#cmd-input"), btn=$("#cmd-run");
+  const admin=$("#cmd-admin") && $("#cmd-admin").checked;
+  state.cmdHist=state.cmdHist||[]; state.cmdHist.unshift(cmd);
+  if(state.cmdHist.length>60) state.cmdHist.pop();
+  // Прибираємо ЛИШЕ початкову підказку. Раніше умова ловила будь-який вивід,
+  // у якому лишився один блок, і мовчки стирала історію команд.
+  const hint=out.querySelector("#cmd-hint"); if(hint) hint.remove();
+  const block=document.createElement("div");
+  block.style.marginBottom="10px";
+  block.innerHTML=`<div class="cmd">${admin?"# ":"$ "}${esc(cmd)}</div>`
+    +`<div class="meta">виконую…</div>`;
+  out.appendChild(block); out.scrollTop=out.scrollHeight; state.term=out.innerHTML;
+  inp.value=""; state.fields.cmd=""; btn.disabled=true; inp.disabled=true;
+  let r;
+  try{
+    r=await api("/api/run",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({cmd,admin,timeout:120})});
+  }catch(e){
+    block.lastElementChild.className="err";
+    block.lastElementChild.textContent="помилка зв'язку: "+e.message;
+    state.term=out.innerHTML;
+    btn.disabled=false; inp.disabled=false; inp.focus(); return;
+  }
+  btn.disabled=false; inp.disabled=false; inp.focus();
+  if(!r.ok){
+    block.lastElementChild.className="err";
+    block.lastElementChild.textContent=r.error||"не вдалося";
+    out.scrollTop=out.scrollHeight; state.term=out.innerHTML; return;
+  }
+  block.lastElementChild.remove();
+  if(r.output) block.insertAdjacentHTML("beforeend",`<div>${esc(r.output)}</div>`);
+  block.insertAdjacentHTML("beforeend",
+    `<div class="meta">код ${r.code} · ${r.level} · ${r.took_ms} мс`
+    +`${r.truncated?" · вивід обрізано":""}</div>`);
+  out.scrollTop=out.scrollHeight; state.term=out.innerHTML;
+}
+window.runCommand=runCommand;
+
+/* ═══════════ ОНОВЛЕННЯ ═══════════ */
+async function checkUpdate(){
+  stick("upd-res",'<div class="muted" style="font-size:12.5px">дивлюся в папку updates…</div>');
+  let r;
+  try{ r=await api("/api/update"); }
+  catch(e){ stick("upd-res",`<div class="warnbox"><span>⚠</span><div>${esc(e.message)}</div></div>`); return; }
+  if(!r.available){
+    stick("upd-res",`<div class="muted" style="font-size:12.5px">Оновлень немає:
+      поточна версія ${esc(r.version)} — найновіша. Монітор дивиться в
+      <b>${esc(r.updates_dir)}</b> і чекає файл PCMonitor-Setup-X.Y.Z.exe.</div>`);
+    return;
+  }
+  stick("upd-res",`<div class="warnbox"><span>⬆</span><div>
+    <b>Знайдено версію ${esc(r.available.version)}</b> (зараз ${esc(r.version)}) · ${fb(r.available.size)}<br>
+    <span class="muted" style="font-size:12px">${esc(r.available.file)}</span><br>
+    <button class="btn small" style="margin-top:8px" onclick="doUpdate()">Встановити й перезапустити</button>
+  </div></div>`);
+}
+async function doUpdate(){
+  stick("upd-res",'<div class="muted" style="font-size:12.5px">встановлюю — монітор зараз перезапуститься…</div>');
+  let r;
+  try{ r=await api("/api/update_install",{method:"POST",
+        headers:{"Content-Type":"application/json"},body:"{}"}); }
+  catch(e){ stick("upd-res",`<div class="warnbox"><span>⚠</span><div>${esc(e.message)}</div></div>`); return; }
+  if(!r.ok){ stick("upd-res",`<div class="warnbox"><span>⚠</span><div>${esc(r.error||"не вдалося")}</div></div>`); return; }
+  stick("upd-res",`<div class="muted" style="font-size:12.5px">Встановлюється ${esc(r.version)}.
+    Сторінка перезавантажиться сама, щойно нова версія підніметься.</div>`);
+  // Після перезапуску токен сесії новий — стара сторінка не зможе робити
+  // POST. Тому чекаємо на нову версію і перезавантажуємось самі.
+  const old=r.version;
+  const t=setInterval(async()=>{
+    try{
+      const s=await (await fetch("/api/status")).json();
+      if(s&&s.version===old){ clearInterval(t); location.reload(); }
+    }catch(_){}
+  },2000);
+}
+window.checkUpdate=checkUpdate; window.doUpdate=doUpdate;
+
+async function probeRights(){
+  stick("rights-res",'<div class="muted" style="font-size:12.5px">перевіряю…</div>');
+  let r;
+  try{ r=await api("/api/run_probe",{method:"POST",
+        headers:{"Content-Type":"application/json"},body:"{}"}); }
+  catch(e){ stick("rights-res",`<div class="warnbox"><span>⚠</span><div>${esc(e.message)}</div></div>`);
+    return; }
+  if(!r.supported){
+    stick("rights-res",`<div class="muted" style="font-size:12.5px">${esc(r.output||"")}</div>`);
+    return;
+  }
+  const row=(t,v)=>{
+    if(!v||!v.ok) return `<div class="err" style="font-size:12.5px">${t}: ${esc((v&&v.error)||"—")}</div>`;
+    const bad=v.admin_group_enabled;
+    return `<div style="font-size:12.5px;color:${bad?"var(--org)":"var(--acc)"}">
+      ${t}: ${bad?"права адміністратора УВІМКНЕНІ":"права адміністратора вимкнені ✓"}
+      <span class="muted" style="font-size:11px">${esc(v.line||"")}</span></div>`;
+  };
+  stick("rights-res",`<div class="frozenbar">
+    <b>Що каже сама Windows</b>
+    <div class="muted" style="font-size:12px;margin:4px 0 6px">
+      Монітор запущено ${r.monitor_elevated?"від адміністратора":"без прав адміністратора"}.</div>
+    ${row("Звичайний запуск", r.user)}
+    ${row("З галочкою «від адміністратора»", r.admin)}</div>`);
+}
+window.probeRights=probeRights;
+
+async function saveCfg(patch){
+  try{
+    const r=await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({config:patch})});
+    if(r.needs_restart){ state.needsRestart=true; loadSettings(); }
+    else toast("Збережено",2500);
+  }catch(e){ toast("Не вдалося зберегти: "+esc(e.message)); }
+}
+async function doRestart(){
+  toast("Перезапускаю збір…",4000);
+  try{ await api("/api/restart",{method:"POST"}); }catch(e){}
+  state.needsRestart=false;
+  setTimeout(async()=>{ for(let i=0;i<20;i++){ await new Promise(r=>setTimeout(r,900));
+    try{ await api("/api/status"); toast("✓ Готово",2500); loadSettings(); return; }catch(e){} }
+    toast("Збирач не піднявся — відкрий монітор ярликом ще раз"); },2500);
+}
+async function doExportAll(){
+  toast("Збираю звіт — це кілька секунд…",6000);
+  try{
+    const r=await api("/api/export_all",{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({days:3})});
+    toast(`📤 Звіт готовий:<div class="f">${esc(r.basename)}</div>
+      <div class="muted">${fb(r.size)} · ${esc(r.hint)}</div>
+      <div class="row"><button class="btn small" onclick="openFolder('exports')">Відкрити папку</button></div>`,15000);
+  }catch(e){ toast("Не вдалося: "+esc(e.message)); }
+}
+window.doExportAll=doExportAll;
+
+async function doVacuum(){
+  toast("Стискаю базу…",4000);
+  const r=await api("/api/vacuum",{method:"POST"});
+  toast(`Готово. Було ${fb(r.before)}, стало ${fb(r.after)} (звільнено ${fb(r.saved)})`,6000);
+  loadSettings();
+}
+async function doPurge(){
+  const d=prompt("Стерти історію, СТАРІШУ за скільки днів?\n\n"+
+    "Введи 0, щоб стерти всю історію.\nСкасувати — Esc.","30");
+  if(d===null) return;
+  const days=parseInt(d,10); if(isNaN(days)||days<0) return;
+  if(!confirm(days===0?"Стерти ВСЮ зібрану історію? Це незворотно.":
+    `Стерти все, що старіше за ${days} дн.?`)) return;
+  await api("/api/purge",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({days})});
+  toast("Історію очищено"); loadSettings(); loadDays();
+}
+async function clearTrust(){
+  if(!confirm("Прибрати позначку «довіряю» з усіх програм?")) return;
+  for(const t of (state.cfg.trusted||[]))
+    await api("/api/trust",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name:t.name,exe:t.exe,on:false})});
+  toast("Готово"); loadSettings(); loadApps();
+}
+async function clearWatch(){
+  for(const n of (state.cfg.watch||[]))
+    await api("/api/watch",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name:n,on:false})});
+  toast("Стеження вимкнено"); loadSettings();
+}
+async function openFolder(what){
+  await api("/api/open_folder",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({what})});
+}
+window.doRestart=doRestart; window.doVacuum=doVacuum; window.doPurge=doPurge;
+window.clearTrust=clearTrust; window.clearWatch=clearWatch; window.openFolder=openFolder;
+
+/* ---------- вкладки ---------- */
+state.tab="now";
+function setTab(t){
+  state.tab=t;
+  document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active",b.dataset.tab===t));
+  document.querySelectorAll(".pane").forEach(p=>p.classList.toggle("active",p.dataset.pane===t));
+  // вибір дня і кнопка автооновлення стосуються лише історичних вкладок
+  const hist = (t==="day"||t==="sec"||t==="ev");
+  $("#daysel").style.display = hist ? "" : "none";
+  $("#live").style.display   = hist ? "" : "none";
+  $("#search").style.display = (t==="cfg"||t==="health"||t==="auto") ? "none" : "";
+  // Налаштування завантажуємо при ПЕРЕХОДІ на вкладку, але не у фоновому
+  // циклі: там вони нічого не оновлювали б, зате стирали б результати
+  // перевірок і набраний у терміналі текст.
+  if(t==="cfg") loadSettings();
+  refreshAll();
+  try{ localStorage.setItem("pcmon.tab",t); }catch(e){}
+}
+window.renderHealth=renderHealth;
+document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
+
+/* ---------- цикл ---------- */
+// Вантажимо лише те, що видно на активній вкладці — менше зайвої роботи.
+async function refreshAll(){
+  const isToday=state.date===today();
+  const jobs=[loadStatus()];
+  // Температури дешеві: відеокарта читається напряму, диски й зони ACPI
+  // монітор кешує на 5 хвилин — тож фонове оновлення нічого не навантажує.
+  if(state.tab==="now") jobs.push(loadLive(), loadTemps());
+  if(state.tab==="day") jobs.push(loadOverview(),loadApps());
+  if(state.tab==="sec") jobs.push(loadApps());
+  if(state.tab==="ev")  jobs.push(loadEvents());
+  if(state.tab==="health") jobs.push(loadHealth(),loadLatency());
+  // Налаштування навмисно НЕ оновлюємо фоново: вони не змінюються самі,
+  // а перемальовування розділу стирало б результати перевірок і набраний
+  // у терміналі текст. Оновлюємо лише у відповідь на дію користувача.
+  if(state.tab==="auto"&&!state.startupData) jobs.push(loadStartup(false));
+  // лічильник на вкладці «Безпека» має бути свіжим завжди
+  if(!["sec","day","cfg","auto"].includes(state.tab)) jobs.push(loadApps());
+  await Promise.allSettled(jobs);
+}
+$("#daysel").onchange=e=>{ state.date=e.target.value; state.open=null; refreshAll(); };
+$("#search").oninput=e=>{ state.search=e.target.value.trim().toLowerCase();
+  renderApps(); renderEvents(); };
+$("#ev-filter").onchange=e=>{ state.evFilter=e.target.value; renderEvents(); };
+$("#live").onclick=()=>{ state.live=!state.live;
+  $("#live").classList.toggle("active",state.live); };
+document.querySelectorAll("#apps-table th[data-k]").forEach(th=>{
+  th.onclick=()=>{ const k=th.dataset.k;
+    if(state.sort.k===k) state.sort.dir*=-1; else state.sort={k,dir:k==="name"?1:-1};
+    renderApps(); };});
+setInterval(()=>{ if(state.live && state.tab!=="now" && state.date===today()
+  && !state.open) refreshAll(); },15000);
+setInterval(loadStatus,15000);
+
+(async()=>{ $("#live").classList.add("active");
+  bindTerminal(); updateTermUI();   // термінал у «Зараз» — статична розмітка
+  let t="now"; try{ t=localStorage.getItem("pcmon.tab")||"now"; }catch(e){}
+  try{
+    await loadDays();
+    setTab(["now","day","sec","ev","health","auto","cfg"].includes(t)?t:"now");
+    await loadApps();   // щоб одразу був лічильник на «Безпеці»
+  }
+  catch(e){ $("#apps-empty").style.display="block";
+    $("#apps-empty").textContent="Не можу під'єднатися до збирача: "+e.message; }
+})();
+</script>
+</body>
+</html>

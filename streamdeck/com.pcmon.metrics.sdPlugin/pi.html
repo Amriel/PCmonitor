@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+  body{margin:0;padding:12px;font:13px/1.45 "Segoe UI",system-ui,sans-serif;
+       background:#2d2d2d;color:#d8d8d8}
+  .row{display:flex;align-items:center;gap:10px;margin-bottom:9px}
+  .row label{width:104px;flex:none;color:#9a9a9a;text-align:right}
+  select,input{flex:1;background:#3d3d3d;border:1px solid #4a4a4a;border-radius:4px;
+       color:#e8e8e8;padding:5px 7px;font:13px system-ui;outline:none}
+  select:focus,input:focus{border-color:#77f}
+  .hint{color:#8a8a8a;font-size:11.5px;margin:2px 0 12px 114px}
+  .st{margin-top:10px;padding:8px 10px;border-radius:5px;font-size:12px}
+  .ok{background:#1d3a26;color:#8ee6a8} .bad{background:#3a1d1d;color:#f0a0a0}
+</style></head>
+<body>
+  <div class="row"><label>Показник</label>
+    <select id="metric">
+      <option value="cpu">Процесор — % усього</option>
+      <option value="core_max">Пік ядра — найзавантаженіше</option>
+      <option value="ram_all">Пам'ять — гігабайти і відсоток разом</option>
+      <option value="ram_pct">Пам'ять — лише відсоток</option>
+      <option value="gpu">GPU — % найбільше в програмі</option>
+      <option value="net">Мережа — швидкість</option>
+      <option value="disk">Диск — швидкість</option>
+      <option value="gpu_all">GPU — пам'ять і температура разом</option>
+      <option value="gpu_temp">Температура відеокарти</option>
+      <option value="vram_pct">Відеопам'ять — % зайнято</option>
+      <option value="vram_free">Відеопам'ять — скільки вільно</option>
+      <option value="disk_temp">Температура диска</option>
+    </select></div>
+  <div class="hint">«Пік ядра» показує те, чого не видно у відсотках від усього
+    процесора: програму, яка впeрлася в одне ядро.</div>
+
+  <div class="row" id="row-vram" style="display:none"><label>Показувати</label>
+    <select id="vram_show">
+      <option value="used">скільки зайнято</option>
+      <option value="free">скільки вільно</option>
+    </select></div>
+  <div class="row" id="row-tw" style="display:none"><label>Температура від</label>
+    <input id="tempwarn" type="number" min="0" max="120" placeholder="83"></div>
+  <div class="hint" id="hint-tw" style="display:none">Градусів, за яких
+    температура на клавіші стає червоною.</div>
+
+  <div class="row"><label>Свій підпис</label>
+    <input id="label" placeholder="лишити порожнім — стандартний"></div>
+
+  <div class="row"><label>Червоніти від</label>
+    <input id="warn" type="number" min="0" max="100" placeholder="90"></div>
+  <div class="hint">У відсотках. 0 — не червоніти.</div>
+
+  <div class="row"><label>Порт монітора</label>
+    <input id="port" placeholder="8787"></div>
+  <div class="hint">Той самий, що в адресі вікна PC Monitor.</div>
+
+  <div id="st" class="st bad">перевіряю зв'язок…</div>
+
+<script>
+let ws, uuid, ctxAction, settings = {};
+const $ = id => document.getElementById(id);
+
+function connectElgatoStreamDeckSocket(port, inUUID, regEvent, info, actionInfo) {
+  uuid = inUUID;
+  try { ctxAction = JSON.parse(actionInfo); } catch (_) { ctxAction = {}; }
+  settings = (ctxAction.payload && ctxAction.payload.settings) || {};
+  ws = new WebSocket("ws://127.0.0.1:" + port);
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ event: regEvent, uuid: inUUID }));
+    fill();
+  };
+}
+window.connectElgatoStreamDeckSocket = connectElgatoStreamDeckSocket;
+
+// Поля, що стосуються лише зведеної клавіші, показуємо тільки для неї —
+// інакше на решті вони збивають з пантелику.
+function toggleRows() {
+  const m = $("metric").value;
+  const combo = (m === "gpu_all" || m === "ram_all");
+  const isGpu = (m === "gpu_all");
+  $("row-vram").style.display = combo ? "flex" : "none";
+  $("row-tw").style.display   = isGpu ? "flex" : "none";
+  $("hint-tw").style.display  = isGpu ? "block" : "none";
+}
+function fill() {
+  $("metric").value    = settings.metric || "cpu";
+  $("label").value     = settings.label  || "";
+  $("warn").value      = settings.warn   != null ? settings.warn : "";
+  $("port").value      = settings.port   || "8787";
+  $("vram_show").value = settings.vram_show || "used";
+  $("tempwarn").value  = settings.tempwarn != null ? settings.tempwarn : "";
+  toggleRows();
+  check();
+}
+function save() {
+  settings = {
+    metric: $("metric").value,
+    label:  $("label").value.trim(),
+    warn:   $("warn").value === "" ? null : +$("warn").value,
+    port:   $("port").value.trim() || "8787",
+    vram_show: $("vram_show").value,
+    tempwarn: $("tempwarn").value === "" ? null : +$("tempwarn").value,
+  };
+  ws.send(JSON.stringify({ event: "setSettings", context: uuid, payload: settings }));
+  toggleRows();
+  check();
+}
+["metric", "label", "warn", "port", "vram_show", "tempwarn"].forEach(id => {
+  $(id).addEventListener("change", save);
+});
+
+async function check() {
+  const st = $("st");
+  try {
+    const r = await fetch("http://127.0.0.1:" + ($("port").value.trim() || "8787")
+                          + "/api/sd", { cache: "no-store" });
+    const d = await r.json();
+    st.className = "st ok";
+    st.textContent = `Зв'язок є · процесор ${d.cpu}% · ${d.ncpu} ядер`;
+  } catch (e) {
+    st.className = "st bad";
+    st.textContent = "PC Monitor не відповідає на порту "
+      + ($("port").value.trim() || "8787") + " — запусти його або виправ порт.";
+  }
+}
+setInterval(check, 4000);
+</script></body></html>
