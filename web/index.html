@@ -941,6 +941,12 @@ async function loadStatus(){
   be.textContent="ETW: "+(et==="активний"||et.startsWith("активний")?"точні байти ✓":et);
   be.className="badge "+(et.startsWith("активний")?"ok":"warn");
   be.title="Стан збору точних байтів мережі та DNS. "+et;
+  // без адмінських прав бейдж стає кнопкою «полагодити»
+  if(s.admin===false){
+    be.style.cursor="pointer";
+    be.title+="\nКлікни, щоб перезапустити монітор від імені адміністратора.";
+    be.onclick=elevateNow;
+  } else { be.style.cursor=""; be.onclick=null; }
   bd.textContent="БД: "+fb(s.db_size);
   bu.textContent="працює "+fdur(s.uptime_s);
   state.cmdAllowed=!!s.commands;
@@ -2518,6 +2524,17 @@ async function loadSettings(){
       <button class="btn small" onclick="doRestart()">Перезапустити зараз</button></div>`:""}
 
     <div class="panel cfg-sec"><h2>Запуск</h2>
+      <div class="cfg-row"><div class="lbl"><b>Стартувати від адміністратора</b>
+        <span>Потрібно для точних байтів мережі по програмах (ETW). Коли
+        увімкнено автозапуск — підвищення йде через планувальник
+        <b>без запиту UAC</b>; інакше з'явиться звичайний запит.
+        Діє з наступного запуску.</span></div>
+        <div class="ctl">${swHtml("sw-adm",c.run_as_admin!==false)}</div></div>
+      ${d.admin?"":`<div class="cfg-row"><div class="lbl"><b>Права адміністратора</b>
+        <span>Зараз монітор працює зі звичайними правами, тому точні байти
+        мережі по програмах (ETW) недоступні. Перезапуск покаже стандартний
+        запит UAC.</span></div>
+        <div class="ctl"><button class="btn small" onclick="elevateNow()">⇧ Перезапустити від адміністратора</button></div></div>`}
       <div class="cfg-row"><div class="lbl"><b>Запускати разом із Windows</b>
         <span>${a.supported?(d.admin?"Стартує у фоні одразу з правами адміністратора — без запиту UAC і без вікна консолі."
           :"Щоб змінити, потрібні права адміністратора: запусти install.bat"):esc(a.reason||"недоступно")}</span></div>
@@ -2675,6 +2692,7 @@ async function loadSettings(){
       saveCfg({[key]:on});
     };};
   t("sw-auto","autostart"); t("sw-tray","traypin");
+  t("sw-adm","run_as_admin");
   t("sw-etw","etw_enabled"); t("sw-gpu","gpu_enabled");
   t("sw-cmd","log_cmdline"); t("sw-sig","sig_check"); t("sw-hash","hash_new_exes");
   // вмикання командного рядка одразу перемальовує розділ, щоб з'явилось поле
@@ -2802,6 +2820,26 @@ async function runCommand(cmd){
   out.scrollTop=out.scrollHeight; state.term=out.innerHTML;
 }
 window.runCommand=runCommand;
+
+/* ═══════════ ПРАВА АДМІНІСТРАТОРА ═══════════ */
+async function elevateNow(){
+  if(!confirm("Перезапустити монітор від імені адміністратора?\n"
+             +"З'явиться стандартний запит UAC — підтверди його.")) return;
+  let r;
+  try{ r=await api("/api/elevate",{method:"POST",
+        headers:{"Content-Type":"application/json"},body:"{}"}); }
+  catch(e){ toast("Не вдалося: "+esc(e.message)); return; }
+  if(!r.ok){ toast(esc(r.error||"не вдалося")); return; }
+  toast("Перезапускаюсь — підтверди запит UAC. Сторінка оживе сама.");
+  // після перезапуску токен новий — чекаємо на монітор і перезавантажуємось
+  const t=setInterval(async()=>{
+    try{
+      const s=await (await fetch("/api/status")).json();
+      if(s&&s.uptime_s!=null&&s.uptime_s<30){ clearInterval(t); location.reload(); }
+    }catch(_){}
+  },2000);
+}
+window.elevateNow=elevateNow;
 
 /* ═══════════ ОНОВЛЕННЯ ═══════════ */
 async function checkUpdate(){

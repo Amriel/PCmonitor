@@ -1,271 +1,202 @@
 # PC Monitor
 
-Власний монітор ресурсів комп'ютера. Показує, скільки кожна програма
-споживає (процесор, пам'ять, диск, мережа), веде історію за весь день —
-що було запущено, які процеси, скільки з'їли, що виходило в інтернет і куди —
-підсвічує підозрілі процеси й дозволяє **однією кнопкою** витягнути детальний
-лог по будь-якій програмі, щоб віддати його на аналіз Claude.
+*[Українська версія →](README.uk.md)*
 
-Усе працює **локально**. Нічого нікуди не відправляється. Дані лежать поряд,
-у папці `data\` у вигляді звичайної бази SQLite.
+A local Windows resource monitor. Shows what every program consumes
+(CPU, RAM, disk, network), keeps a full-day history — what ran, how much
+it ate, what went online and where — highlights suspicious processes, and
+exports a detailed per-app log **with one click** so you can hand it to
+Claude for analysis.
 
----
+Everything runs **locally**. Nothing is sent anywhere. Your data lives
+next to the app in `data\` as a plain SQLite database.
 
-## Швидкий старт (3 кроки)
-
-1. **`install.bat`** — двічі клікнути. Встановить потрібні пакети Python.
-   (Якщо Python не встановлений — постав із python.org і на першому екрані
-   інсталятора обов'язково постав галочку **«Add python.exe to PATH»**.)
-
-2. **`run.bat`** — запустити монітор. Відкриється вікно-апка і почнеться збір.
-   > Хочеш повну статистику мережі (**точні байти по кожній програмі + які
-   > домени вона смикала**)? Клікни по `run.bat` правою → **«Запуск від імені
-   > адміністратора»**. Без адміна теж усе працює, просто без точних байтів
-   > (тоді мережа рахується сумарно по ПК + список з'єднань «хто куди ходить»).
-
-3. Далі користуйся: **`open.bat`** відкриває вікно будь-коли, **`stop.bat`**
-   зупиняє збір.
-
-Хочеш, щоб монітор **сам стартував при вмиканні комп'ютера** — клікни правою по
-**`autostart_enable.bat`** → «Запуск від імені адміністратора». Прибрати
-автозапуск — `autostart_disable.bat`.
+> Interface language: Ukrainian.
 
 ---
 
-## Це вікно-апка, а не «сайт у браузері»
+## Quick start (3 steps)
 
-Монітор відкривається у **звичайному вікні Windows**: власний пункт на панелі
-задач із назвою «PC Monitor», власний процес у Диспетчері задач, звичайний
-заголовок вікна. Ніякого Edge, вкладок, адресного рядка чи закладок.
+1. **`install.bat`** — double-click. Installs the required Python packages.
+   (No Python yet? Get it from python.org and tick **"Add python.exe to
+   PATH"** on the first installer screen.)
 
-Всередині вікна інтерфейс малює **WebView2** — системний компонент, який уже
-вбудований у Windows 10/11. На ньому ж працюють штатні застосунки Windows
-(Параметри, Пошта тощо) і, скажімо, Teams. Тобто це не «браузер із прихованими
-кнопками», а стандартний спосіб будувати застосунки під Windows.
+2. **`run.bat`** — starts the monitor. An app window opens and collection
+   begins.
+   > Want full network stats (**exact bytes per app + the domains it
+   > queried**)? Right-click `run.bat` → **"Run as administrator"**.
+   > It works without admin too, just without exact per-app bytes.
 
-Плюс є **іконка в треї** біля годинника: клік — відкрити вікно, права кнопка —
-меню. Закриття вікна не зупиняє збір — монітор далі працює у фоні.
+3. From then on: **`open.bat`** opens the window any time, **`stop.bat`**
+   stops collection.
 
-> Якщо з якоїсь причини `pywebview` не встановився, застосунок не зламається:
-> він тихо відкотиться до запасного варіанта (вікно браузера в режимі застосунку).
-> Перевірити просто: у Диспетчері задач має бути «Python», а не «Microsoft Edge».
-
-Технічно всередині це маленький локальний сервер на `127.0.0.1` (доступний лише
-з цього комп'ютера), але тобі це знати не обов'язково — просто закривай вікно,
-збір продовжується у фоні.
+To make the monitor **start with Windows**, right-click
+**`autostart_enable.bat`** → "Run as administrator". Remove it with
+`autostart_disable.bat`.
 
 ---
 
-## Що показує
+## A real app window, not "a site in a browser"
 
-**Зверху — картки за день:** середнє й пікове CPU, пік RAM, скільки за день
-пішло/прийшло по мережі, скільки прочитано/записано на диск, скільки програм
-було активно, скільки нових exe з'явилося, скільки підозрілих.
+The monitor opens in a **native Windows window**: its own taskbar entry,
+its own process, a normal title bar. Inside, the UI is rendered by
+**WebView2** — the system component built into Windows 10/11 (the same one
+that powers Settings, Mail, Teams).
 
-**⚡ Зараз (наживо)** — панель угорі в стилі Диспетчера задач: **усі** запущені
-програми з колонками **CPU · Пам'ять · Диск · Мережа · GPU · Процесів**.
-Оновлюється кожні 2 секунди. Клік по заголовку колонки — сортування (як у
-Диспетчері). Клік по рядку — деталі програми. «⏸ Пауза» — зупинити оновлення,
-щоб роздивитись. Панель є лише для сьогоднішнього дня.
-
-### Чому цифри мають збігатися з Диспетчером задач
-
-Спершу монітор показував пам'ять утричі більшу за Диспетчер (Opera «7.5 ГБ»
-замість 2.4 ГБ). Причина: він рахував **робочий набір** (RSS) і додавав його по
-всіх процесах програми. А спільна пам'ять — бібліотеки Windows, спільні буфери —
-присутня в кожному процесі, тож у браузера з 34 процесів вона рахувалась 34 рази.
-
-Тепер монітор рахує **унікальну пам'ять процесу** (USS) — саме те, що показує
-Диспетчер задач. Це трохи дорожче, тому передбачено запобіжник: якщо опитування
-почне тривати задовго, монітор сам перемкнеться на дешевий режим і напише про це
-в лог. Режим видно в шапці панелі, змінюється в `config.json` → `memory_metric`
-(`auto` — типово, `private` — дешево, `rss` — стара поведінка).
-
-**GPU** береться з тих самих лічильників продуктивності Windows, з яких його бере
-Диспетчер задач («GPU Engine»). Прав адміністратора не потребує, драйверів теж.
-
-Невеликі розбіжності по CPU (наприклад 14% проти 18%) — це нормально: Диспетчер
-і монітор рахують за різні проміжки часу й у різні моменти.
-
-**Два графіки:** CPU і RAM протягом дня; мережа (надіслано/отримано) протягом дня.
-
-**Таблиця «Програми за день»** — головне. По кожній програмі: CPU-час, пік CPU,
-пік RAM, читання/запис диска, ↑відправлено/↓отримано, скільки різних IP, скільки
-доменів, скільки разів запускалася, бал підозрілості. Клік по рядку — **деталі**:
-графіки цієї програми по хвилинах, повний список запусків (коли, як довго,
-скільки CPU, який процес її породив), усі IP-адреси та домени, куди вона ходила.
-
-**⚠ Зверни увагу** — окрема панель, що з'являється, лише коли є на що дивитися:
-процеси, які набрали багато балів підозрілості, з поясненням причин.
-
-**Стрічка подій** — хронологія: що коли запустилося й завершилося.
-
-**Вибір дня** (список у верхньому правому куті) — можна дивитися будь-який
-минулий день. Похвилинна деталізація зберігається ~3 тижні, денні підсумки —
-рік (усе налаштовується).
+There is also a **tray icon**: click to open the window, right-click for
+the menu. Closing the window does not stop collection — the monitor keeps
+working in the background. Technically it is a tiny local server bound to
+`127.0.0.1` only — unreachable from the network.
 
 ---
 
-## «Підозрілий процес» — як це працює
+## What it shows
 
-Монітор рахує бали за ознаками, які часто (але не завжди!) свідчать про щось
-недобре, і пише **людською мовою, чому саме** він звернув увагу. Наприклад:
+**Day cards on top:** average/peak CPU, peak RAM, network in/out for the
+day, disk read/write, how many programs were active, new executables,
+suspicious ones.
 
-- процес називається як системний (`svchost.exe`), але запускається не з
-  системної папки — класична маскування шкідливого ПЗ;
-- запускається з `Temp`, `Downloads`, `ProgramData`, кореня диска чи Кошика;
-- подвійне розширення (`звіт.pdf.exe`);
-- цифровий підпис не збігається з файлом або відсутній;
-- багато вихідного трафіку / відвантажує значно більше, ніж качає;
-- лізе на десятки різних IP або на нетипові порти;
-- активний уночі; часто перезапускається; вперше з'явився сьогодні.
+**⚡ Now (live)** — a Task-Manager-style panel: **all** running programs
+with CPU · Memory · Disk · Network · GPU · Processes columns, refreshed
+every 2 seconds. Click a column header to sort, click a row for details.
 
-**Це підказки, а не вирок.** Багато чесних програм теж можуть набирати бали.
-Якщо бачиш знайому й довірену програму — натисни **«✓ Довіряю»**, і вона
-більше не потраплятиме в список уваги. А якщо щось справді насторожило —
-натисни **«📤 Лог для Claude»** (див. нижче) і надішли мені файл на розбір.
+Memory is counted the way Task Manager counts it (unique process memory,
+USS), so the numbers match. GPU comes from the same Windows performance
+counters Task Manager uses ("GPU Engine") — no admin, no drivers.
 
----
+**Two charts:** CPU/RAM over the day; network sent/received over the day.
 
-## Детальний лог для аналізу (та сама «одна кнопка»)
+**"Apps per day" table** — the core. Per app: CPU time, CPU peak, RAM
+peak, disk read/write, ↑sent/↓received, distinct IPs, domains, launch
+count, suspicion score. Click a row for **details**: per-minute charts,
+every launch (when, how long, which process spawned it), every IP and
+domain it contacted.
 
-У кожному рядку таблиці є кнопка **📤**, і така сама — у деталях програми та в
-панелі підозрілих. Натискаєш — монітор складає **повний JSON-звіт по цій
-програмі** у папку `exports\`:
+**⚠ Attention panel** — appears only when something scored high, with
+plain-language reasons.
 
-- який це exe, звідки, розмір, дата, SHA-256, стан цифрового підпису;
-- поведінка за день по хвилинах (CPU, RAM, диск, мережа);
-- **усі** IP-адреси, порти й домени, куди програма зверталася;
-- усі її запуски й завершення, хто її породжував;
-- історія за попередні дні;
-- перелічені причини підозри.
-
-Далі просто **перекидаєш цей файл мені в чат** і пишеш «проаналізуй» — і я
-розберу, що це за програма і чи варто хвилюватися.
-
-**«👁 Стежити детально»** (кнопка в деталях програми) — вмикає збереження сирих
-семплів кожні 5 секунд саме для цієї програми. Зручно, коли хочеш зловити
-короткий сплеск: увімкнув, дав попрацювати, потім експортував — і в звіті буде
-секунда-в-секунду картина.
+**Event feed** — a timeline of what started and stopped, and a **day
+picker** for any past day. Per-minute detail is kept ~3 weeks, daily
+summaries for a year (both configurable).
 
 ---
 
-## Безпека
+## How "suspicious" scoring works
 
-- **Усе локально.** Сервер слухає виключно `127.0.0.1` — з мережі до нього не
-  достукатися. Жодних хмар, акаунтів, відправки телеметрії.
-- **Дані у тебе.** База — `data\pcmon.sqlite3`, звіти — `exports\`. Хочеш стерти
-  історію — просто видали ці папки.
-- **Ніяких драйверів і перехоплення трафіку.** Монітор лише *читає* дані, які
-  Windows формує сам: список процесів (psutil) і штатні події ядра (ETW —
-  той самий механізм, що живить «Журнал застосунків» у Диспетчері задач).
-  Це не сніфер і не антивірус-перехоплювач на кшталт NetLimiter.
-- **Код відкритий** — звичайний Python без фреймворків і без збірки:
-  ядро в `monitor.py`, евристики підозрілості в `suspicion.py`, решта
-  модулів — по одному на задачу (мережа, датчики, автозапуск, буфер…).
-- **Команди з термінала** (вимкнено за замовчуванням) виконуються від
-  **звичайного користувача**, навіть якщо монітор запущено від
-  адміністратора; якщо знизити права не вдалося — команда не виконується
-  взагалі. Небезпечні операції в блок-списку.
-- Командні рядки процесів за замовчуванням **не** логуються (щоб у базу не
-  потрапляли, скажімо, паролі в аргументах). Вмикається в `config.json`
-  (`log_cmdline`), якщо треба.
+The monitor adds points for traits that often (not always!) indicate
+something shady, and explains **why** in plain language:
 
-## Навантаження
+- named like a system process (`svchost.exe`) but running from a
+  non-system path — classic malware masquerade;
+- runs from `Temp`, `Downloads`, `ProgramData`, a drive root, or the
+  Recycle Bin;
+- double extension (`report.pdf.exe`);
+- digital signature missing or not matching the file;
+- heavy outbound traffic / uploads far more than it downloads;
+- dozens of distinct IPs or unusual ports;
+- active at night; restarts frequently; first seen today.
 
-Зроблено легким навмисне:
-
-- опитування процесів раз на 5 с — це частки відсотка CPU;
-- запис у базу **пачками** раз на 30 с, а не постійно;
-- процес монітора йде з пріоритетом **нижче звичайного** (і низьким пріоритетом
-  диска) — на іграх та роботі не позначається;
-- база за звичайний день — кілька мегабайт; старі похвилинні дані самі
-  прибираються, лишаючи денні підсумки;
-- графіки рахуються, лише коли відкрите вікно.
-
-ETW і дані процесів — це те, що ядро Windows генерує й так, тож накладні витрати
-на їх читання мінімальні.
+**These are hints, not verdicts.** Known-good programs can score points
+too — press **"✓ Trust"** and they leave the attention list.
 
 ---
 
-## Ще інструменти всередині
+## One-click log for analysis
 
-- **🌡 Температури** — відеокарта (NVML), накопичувачі (SMART), зони ACPI —
-  компактним рядком на вкладці «Зараз». Без жодного драйвера ядра, тому
-  температури CPU чесно немає (і в інтерфейсі пояснено чому).
-- **⌨ Термінал** на вкладці «Зараз» (після ввімкнення в налаштуваннях).
-- **🩺 Здоров'я** — перевірки дисків, драйверів, автозапуску, оновлень,
-  журналу подій; замір затримок системи (DPC/ISR); діагностика буфера обміну.
-- **🚀 Автозапуск** — що стартує з Windows, з вимиканням тим самим штатним
-  механізмом, що й у Диспетчері задач.
-- **Stream Deck** — власний плагін: метрики з міні-графіками прямо на
-  клавішах (Налаштування → «Встановити плагін»).
+Every table row has a **📤** button. Press it and the monitor writes a
+**complete JSON report for that app** into `exports\`: the executable
+(path, size, SHA-256, signature state), per-minute behaviour, every IP,
+port and domain, every launch and exit, history for previous days, and
+the suspicion reasons. Drop that file into a Claude chat and ask for an
+analysis.
 
----
-
-## Зібрати exe та інсталятор
-
-Не обов'язково — з `run.bat` усе працює й так. Але якщо хочеться
-встановлюваної програми без Python:
-
-1. Постав [Inno Setup 6](https://jrsoftware.org/isinfo.php) (для інсталятора).
-2. Запусти **`build.bat`** — він сам поставить PyInstaller, збере
-   `dist\PCMonitor\PCMonitor.exe` і `dist\PCMonitor-Setup-X.Y.Z.exe`.
-3. Інсталятор ставиться **без прав адміністратора** у
-   `%LocalAppData%\Programs\PC Monitor`, при оновленні та видаленні
-   **не чіпає** базу даних.
-
-**Оновлення** — локальні, без інтернету: зібраний інсталятор потрапляє в
-папку `updates\`, і запущена апка пропонує його в Налаштуваннях →
-«Про програму» → «Перевірити». Один клік — стара версія чемно завершується,
-нова стає на її місце і запускається сама.
+**"👁 Watch closely"** records raw 5-second samples for one app — useful
+for catching short spikes.
 
 ---
 
-## Налаштування (`config.json`)
+## Security
 
-| Параметр | Що робить | Типово |
+- **Everything is local.** The server listens on `127.0.0.1` only.
+  No cloud, no accounts, no telemetry.
+- **Your data stays yours.** The database is `data\pcmon.sqlite3`,
+  reports are in `exports\`. Delete those folders to erase history.
+- **No drivers, no traffic interception.** The monitor only *reads* what
+  Windows already produces: the process list (psutil) and built-in kernel
+  events (ETW — the same mechanism Task Manager's app history uses).
+- **Open code** — plain Python, no frameworks, no build step: the core in
+  `monitor.py`, suspicion heuristics in `suspicion.py`, one module per
+  concern for the rest.
+- **Terminal commands** (off by default) run as the **regular user** even
+  when the monitor is elevated; if dropping privileges fails, the command
+  is refused rather than run elevated. Dangerous operations are
+  block-listed.
+- Process command lines are **not** logged by default (so passwords in
+  arguments never reach the database). Enable via `log_cmdline` if needed.
+
+## Footprint
+
+Deliberately light: process polling every 5 s costs a fraction of a
+percent of CPU; database writes are batched; the monitor runs at
+below-normal CPU and low I/O priority; a typical day is a few megabytes;
+old per-minute data prunes itself; charts render only while the window is
+open.
+
+---
+
+## More tools inside
+
+- **🌡 Temperatures** — GPU (NVML), drives (SMART), ACPI thermal zones —
+  as a compact strip on the "Now" tab. No kernel driver, which is also
+  why there is honestly no CPU temperature (the UI explains why).
+- **⌨ Terminal** on the "Now" tab (after enabling it in Settings).
+- **🩺 Health** — read-only checks of disks, drivers, startup entries,
+  updates, event log; system latency measurement (DPC/ISR); clipboard
+  diagnostics.
+- **🚀 Startup manager** — what launches with Windows, toggled through the
+  same official mechanism Task Manager uses.
+- **Stream Deck** — a native plugin: metrics with mini-charts right on the
+  keys (Settings → "Install plugin").
+
+---
+
+## Building the exe and installer
+
+Optional — everything works from `run.bat` as is. For an installable
+program that does not need Python:
+
+1. Install [Inno Setup 6](https://jrsoftware.org/isinfo.php).
+2. Run **`build.bat`** — it installs PyInstaller, builds
+   `dist\PCMonitor\PCMonitor.exe` and `dist\PCMonitor-Setup-X.Y.Z.exe`.
+3. The installer is **per-user** (no admin required), installs to
+   `%LocalAppData%\Programs\PC Monitor`, and **never touches** the
+   database on update or uninstall.
+
+**Updates** are local and offline by design: the built installer lands in
+`updates\`, and the running app offers it under Settings → "About" →
+"Check". One click — the old version shuts down cleanly, the new one
+takes its place and starts itself.
+
+---
+
+## Configuration (`config.json`)
+
+| Key | What it does | Default |
 |---|---|---|
-| `sample_interval` | як часто опитувати процеси, с | 5 |
-| `conn_poll_interval` | як часто опитувати з'єднання, с | 10 |
-| `flush_interval` | як часто писати в базу, с | 30 |
-| `dashboard_port` | порт локального вікна | 8787 |
-| `retention_minutes_days` | скільки днів тримати похвилинну деталізацію | 21 |
-| `retention_days` | скільки днів тримати денні підсумки / події | 365 |
-| `etw_enabled` | точні байти мережі + DNS (потрібен адмін) | true |
-| `sig_check` | перевіряти цифровий підпис нових exe | true |
-| `hash_new_exes` | рахувати SHA-256 нових exe | true |
-| `log_cmdline` | писати командні рядки процесів | false |
-| `suspicion.*` | пороги евристик підозрілості | див. файл |
+| `sample_interval` | process polling period, s | 5 |
+| `conn_poll_interval` | connection polling period, s | 10 |
+| `flush_interval` | database write period, s | 30 |
+| `dashboard_port` | local UI port | 8787 |
+| `retention_minutes_days` | days of per-minute detail | 21 |
+| `retention_days` | days of daily summaries / events | 365 |
+| `etw_enabled` | exact network bytes + DNS (needs admin) | true |
+| `sig_check` | verify signatures of new executables | true |
+| `hash_new_exes` | SHA-256 new executables | true |
+| `log_cmdline` | log process command lines | false |
+| `suspicion.*` | heuristic thresholds | see file |
 
-Після зміни — перезапусти монітор (`stop.bat`, потім `run.bat`).
+## Troubleshooting
 
----
-
-## Командний рядок (для допитливих)
-
-```
-python monitor.py                 запустити збір (+ вікно, якщо є консоль)
-python monitor.py --window        відкрити вікно (збір підніметься сам)
-python monitor.py --status        показати стан збирача
-python monitor.py --export chrome.exe   зробити звіт по програмі з консолі
-python monitor.py --export chrome.exe --date 2026-08-20
-python monitor.py --vacuum        стиснути базу
-```
-
----
-
-## Якщо щось не так
-
-- **Вікно не відкрилося / порожнє.** Дай монітору 1–2 хвилини після першого
-  запуску — перша похвилинна точка з'являється після закриття хвилини. Логи —
-  у `logs\monitor.log`.
-- **ETW: «потрібні права адміністратора».** Це нормально без адміна. Хочеш точні
-  байти по програмах — запусти `run.bat` (або автозапуск) від адміністратора.
-- **ETW: «немає pywintrace».** Виконай `install.bat` ще раз. Якщо не ставиться —
-  монітор усе одно працює, просто мережа буде сумарна + список з'єднань.
-- **Порт зайнятий.** Зміни `dashboard_port` у `config.json`.
-- **Багато системних процесів у списку.** Це нормально. Сортуй за CPU-часом або
-  користуйся пошуком — і став «✓ Довіряю» відомим програмам.
-
-Питання — тисни 📤 на будь-якій програмі й надсилай мені звіт.
+- **Port already in use** — change `dashboard_port` in `config.json`.
+- **Lots of system processes in the list** — that's normal; sort by CPU
+  time, use search, and "✓ Trust" the programs you know.

@@ -88,6 +88,11 @@ DEFAULT_CONFIG = {
     "etw_enabled": True,           # точні байти мережі + DNS (потрібен адмін)
     "gpu_enabled": True,           # завантаження GPU по процесах (лічильники Windows)
     "clipboard_watch": True,       # стежити за збоями буфера обміну
+    # Стартувати одразу з правами адміністратора (для ETW — точних байтів
+    # мережі по програмах). Якщо увімкнено автозапуск, підвищення йде через
+    # задачу планувальника БЕЗ запиту UAC; інакше з'явиться звичайний запит.
+    # Відмовився від UAC — монітор просто працює зі звичайними правами.
+    "run_as_admin": True,
     # Виконання команд із вікна монітора. ВИМКНЕНО за замовчуванням свідомо:
     # це найпотужніша можливість застосунку, і вмикати її має людина, а не
     # оновлення. Команди виконуються від звичайного користувача навіть тоді,
@@ -3202,6 +3207,14 @@ def make_handler(ctx: Ctx):
                     self._json(install_update())
                 elif path == "/api/tray":
                     self._json(tray_pin_set(bool(body.get("pin"))))
+                elif path == "/api/elevate":
+                    if is_admin():
+                        self._json({"ok": False,
+                                    "error": "монітор уже працює з правами адміністратора"})
+                    else:
+                        self._json({"ok": True})
+                        threading.Thread(target=restart_elevated,
+                                         daemon=True).start()
                 elif path == "/api/quit":
                     self._json({"ok": True})
                     threading.Thread(target=shutdown, daemon=True).start()
@@ -3548,6 +3561,7 @@ def ensure_collector(cfg):
 # ------------------------------------------------------------------ main ----
 _httpd = None
 _restart_requested = False
+_restart_elevated = False
 
 
 def restart():
@@ -3555,6 +3569,63 @@ def restart():
     global _restart_requested
     _restart_requested = True
     log.info("Перезапуск на запит із налаштувань…")
+    shutdown()
+
+
+def try_admin_relaunch(cfg):
+    """
+    Стартуємо без прав, а в налаштуваннях run_as_admin — перезапуститися
+    підвищено. Повертає "task" (піднято через планувальник), "uac" (запущено
+    копію через запит UAC) або None (лишаємось як є). При "task"/"uac" цьому
+    процесу слід тихо вийти.
+
+    Порядок спроб:
+      1. Задача планувальника (автозапуск): зареєстрована з найвищими
+         правами, тому `schtasks /Run` піднімає монітор БЕЗ запиту UAC.
+      2. Звичайний «Запуск від імені адміністратора» (ShellExecuteW runas) —
+         з запитом UAC. Відмова — не помилка: працюємо зі звичайними правами.
+    """
+    if not IS_WIN or is_admin() or not cfg.get("run_as_admin", True):
+        return None
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        q_ = subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME],
+                            capture_output=True, timeout=10, creationflags=flags)
+        if q_.returncode == 0:
+            r = subprocess.run(["schtasks", "/Run", "/TN", TASK_NAME],
+                               capture_output=True, timeout=15, creationflags=flags)
+            if r.returncode == 0:
+                for _ in range(40):
+                    time.sleep(0.5)
+                    if collector_running(cfg):
+                        log.info("Піднявся через задачу планувальника — без UAC")
+                        return "task"
+    except Exception:
+        pass
+    try:
+        import ctypes
+        args = [a for a in sys.argv[1:]] or ["--quiet"]
+        cmd = _self_cmd(*args)
+        r = ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", cmd[0], subprocess.list2cmdline(cmd[1:]), None, 1)
+        if r > 32:
+            return "uac"
+        log.info("UAC відхилено (код %s) — працюю зі звичайними правами", r)
+    except Exception:
+        log.exception("Не вдалося піднятись — працюю зі звичайними правами")
+    return None
+
+
+def restart_elevated():
+    """
+    Перезапустити збирач З ПРАВАМИ АДМІНІСТРАТОРА (для ETW — точних байтів
+    мережі). Покаже стандартний запит UAC. Якщо людина відмовить — монітор
+    підніметься назад зі звичайними правами, а не зникне.
+    """
+    global _restart_requested, _restart_elevated
+    _restart_requested = True
+    _restart_elevated = True
+    log.info("Перезапуск від імені адміністратора…")
     shutdown()
 
 
@@ -3716,15 +3787,32 @@ def run_collector(cfg, with_tray=True, console=False):
     if _restart_requested:
         log.info("Стартую наново з новими налаштуваннями")
         time.sleep(1.5)          # дати ОС звільнити порт
-        try:
-            kwargs = {}
-            if IS_WIN:
-                kwargs["creationflags"] = 0x00000008 | 0x08000000
-            else:
-                kwargs["start_new_session"] = True
-            subprocess.Popen(_self_cmd("--quiet"), **kwargs)
-        except Exception:
-            log.exception("Не вдалося перезапуститись")
+        cmd = _self_cmd("--quiet")
+        started = False
+        if _restart_elevated and IS_WIN:
+            try:
+                import ctypes
+                # «runas» — той самий механізм, що й «Запуск від імені
+                # адміністратора» в провіднику: з'являється запит UAC.
+                r = ctypes.windll.shell32.ShellExecuteW(
+                    None, "runas", cmd[0],
+                    subprocess.list2cmdline(cmd[1:]), None, 1)
+                started = r > 32          # <=32 — відмова UAC чи помилка
+                if not started:
+                    log.warning("UAC відхилено (код %s) — стартую зі "
+                                "звичайними правами", r)
+            except Exception:
+                log.exception("Не вдалося піднятись — стартую звичайно")
+        if not started:
+            try:
+                kwargs = {}
+                if IS_WIN:
+                    kwargs["creationflags"] = 0x00000008 | 0x08000000
+                else:
+                    kwargs["start_new_session"] = True
+                subprocess.Popen(cmd, **kwargs)
+            except Exception:
+                log.exception("Не вдалося перезапуститись")
         return 0
 
     log.info("Зупинено.")
@@ -3749,8 +3837,23 @@ def main():
     cfg = load_config()
     if args.stop:
         return cli_stop(cfg)
+
     console = not args.quiet and sys.stdout is not None and sys.stdout.isatty()
     setup_logging(console)
+
+    # Одразу з правами адміністратора (run_as_admin у config.json).
+    # Стосується лише запусків, що піднімають збирач; --status/--export
+    # і сусідство з уже запущеним монітором прав не потребують.
+    if (IS_WIN and not (args.status or args.export or args.vacuum)
+            and not collector_running(cfg)):
+        mode = try_admin_relaunch(cfg)
+        if mode == "task":
+            # задача стартує збирач у фоні; інтерактивному запуску — вікно
+            if args.window or args.native_window or not args.quiet:
+                open_window(cfg)
+            return 0
+        if mode == "uac":
+            return 0     # підвищена копія повторить цей самий запуск сама
 
     if args.native_window:
         # Нативне вікно ЖИВЕ В ГОЛОВНОМУ ПОТОЦІ цього процесу (вимога Windows GUI).
