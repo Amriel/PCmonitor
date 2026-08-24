@@ -55,7 +55,7 @@ sys.path.insert(0, BASE)
 import psutil  # noqa: E402
 import suspicion  # noqa: E402
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 IS_WIN = sys.platform == "win32"
 GITHUB_REPO = "Amriel/PCmonitor"   # звідки апка бере нові релізи
 
