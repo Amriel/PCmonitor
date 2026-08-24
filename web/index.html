@@ -10,6 +10,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%2310131a'/><rect x='18' y='52' width='14' height='30' rx='3' fill='%234ade80'/><rect x='43' y='30' width='14' height='52' rx='3' fill='%234ade80'/><rect x='68' y='42' width='14' height='40' rx='3' fill='%234ade80'/></svg>">
 <script src="/chart.umd.js"></script>
+<script src="/i18n_en.js"></script>
 <style>
   :root{
     --bg:#0e1116; --panel:#161a22; --panel2:#1c212c; --line:#262c38;
@@ -361,6 +362,7 @@
   <input type="text" id="search" placeholder="Пошук програми…" style="width:190px">
   <select id="daysel"></select>
   <button class="btn" id="live" title="Автооновлення кожні 15 с">⟳ Живе</button>
+  <button class="btn" id="langbtn" title="Мова інтерфейсу / Interface language"></button>
 </div>
 
 <nav class="tabs" id="tabs">
@@ -729,12 +731,74 @@
 <script>
 "use strict";
 const $=s=>document.querySelector(s);
+
+/* ═══════════ ДВІ МОВИ ═══════════
+   Мова-джерело — українська, прямо в коді. Англійська накладається зверху:
+   словник I18N_EN (точні збіги) + I18N_RX (шаблони з числами) з i18n_en.js.
+   Перекладаються ГОТОВІ текстові вузли після кожного рендеру — усі динамічні
+   блоки проходять через dom()/stick(), тож перехоплення централізоване.
+   Чого у словнику немає — лишається українською: нічого не ламається. */
+let LANG="uk";
+try{ LANG=localStorage.getItem("pcmon.lang")||"uk"; }catch(e){}
+const _I18N_RX=(window.I18N_RX||[]).map(([p,r])=>{
+  try{ return [new RegExp(p),r.replace(/\$(\d)/g,"$$$1")]; }catch(e){ return null; }
+}).filter(Boolean);
+// дрібні слова-статуси, які лишаються всередині вже перекладених шаблонів
+const _I18N_INLINE=[["активний","active"],["вимкнено в налаштуваннях","disabled in settings"],
+  ["вимкнено","disabled"],["недоступно: не Windows","unavailable: not Windows"],
+  ["недоступно","unavailable"],["зупинено","stopped"],["немає","none"],["невідомо","unknown"]];
+function t(s){
+  if(LANG!=="en"||s==null) return s;
+  const d=window.I18N_EN||{}; const k=String(s);
+  if(d[k]!=null) return d[k];
+  // збіг по нормалізованих пробілах: довгі абзаци в HTML розбиті переносами
+  const norm=k.replace(/\s+/g," ").trim();
+  if(norm!==k && d[norm]!=null) return d[norm];
+  if(k.includes("\n"))               // багаторядковий вузол: рядок за рядком
+    return k.split("\n").map(x=>{ const st=x.trim();
+      return st? x.replace(st,t(st)) : x; }).join("\n");
+  let out=k;
+  for(const [p,r] of _I18N_RX) if(p.test(out)){ out=out.replace(p,r); break; }
+  // хвости на кшталт «Стан: активний» усередині перекладеного шаблону
+  if(_CYR.test(out))
+    for(const [ua,en] of _I18N_INLINE) out=out.split(ua).join(en);
+  return out;
+}
+const _CYR=/[а-яА-ЯіїєґІЇЄҐ]/;
+function translateNode(el){
+  if(LANG!=="en"||!el) return;
+  try{
+    const w=document.createTreeWalker(el,NodeFilter.SHOW_TEXT);
+    let n;
+    while((n=w.nextNode())){
+      const raw=n.nodeValue, s=raw.trim();
+      if(!s||!_CYR.test(s)) continue;
+      const tr=t(s);
+      if(tr!==s) n.nodeValue=raw.replace(s,tr);
+    }
+    if(el.querySelectorAll)
+      el.querySelectorAll("[title],[placeholder]").forEach(e=>{
+        for(const a of ["title","placeholder"]){
+          const v=e.getAttribute(a);
+          if(v&&_CYR.test(v)){ const tr=t(v); if(tr!==v) e.setAttribute(a,tr); }
+        }});
+  }catch(e){}
+}
+function setLang(l){
+  try{ localStorage.setItem("pcmon.lang",l); }catch(e){}
+  // збирачеві теж (меню трея) — не страшно, якщо не вдасться
+  try{ api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({config:{lang:l}})}).catch(()=>{}); }catch(e){}
+  location.reload();   // найчесніше застосування: все рендериться наново
+}
+window.setLang=setLang;
 const state={date:null,days:[],apps:[],overview:null,status:null,sort:{k:"cpu_core_s",dir:-1},
   search:"",live:true,liveOn:true,open:null,charts:{},detailCharts:[],events:[],evFilter:"",
   hist:[]};   // короткий ряд живих замірів для «сер./пік» у картках
 function today(){ return new Date().toISOString().slice(0,10); }
 // українські форми: 1 ядро, 2 ядра, 5 ядер, 11 ядер, 22 ядра
 function plural(n,one,few,many){
+  if(LANG==="en") return Math.abs(n)===1?t(one):t(many);
   const a=Math.abs(n)%100, b=a%10;
   if(a>10&&a<20) return many;
   if(b>1&&b<5) return few;
@@ -745,35 +809,46 @@ function dayStart(){ const p=(state.date||today()).split("-");
   return new Date(+p[0],+p[1]-1,+p[2]).getTime()/1000; }
 
 /* ---------- формат ---------- */
+// Одиниці перекладаються прямо тут — тоді всі складені рядки з числами
+// («43.0 ГіБ з 95.4 ГіБ») англійською виходять самі собою.
+const EN=LANG==="en";
+const U_B=EN?" B":" Б", U_UNITS=EN?["KiB","MiB","GiB","TiB"]:["КіБ","МіБ","ГіБ","ТіБ"];
+const U_S=EN?" s":" с", U_MIN=EN?" min":" хв", U_H=EN?" h":" год";
 function fb(n){ if(n==null) return "—"; n=+n;
-  if(n<1024) return n+" Б";
-  const u=["КіБ","МіБ","ГіБ","ТіБ"]; let i=-1;
+  if(n<1024) return n+U_B;
+  const u=U_UNITS; let i=-1;
   do{ n/=1024; i++; }while(n>=1024 && i<u.length-1);
   return n.toFixed(n>=100?0:n>=10?1:2)+" "+u[i]; }
 function fdur(s){ if(s==null) return "—"; s=Math.round(s);
-  if(s<60) return s+" с";
+  if(s<60) return s+U_S;
   const h=Math.floor(s/3600), m=Math.floor(s%3600/60);
-  if(h) return h+" год "+String(m).padStart(2,"0")+" хв";
-  return m+" хв "+String(s%60).padStart(2,"0")+" с"; }
+  if(h) return h+U_H+" "+String(m).padStart(2,"0")+U_MIN;
+  return m+U_MIN+" "+String(s%60).padStart(2,"0")+U_S; }
 /* Процесорний час — це СУМА по всіх ядрах, а не час на годиннику.
    Гра, що дві години вантажила шість ядер, дає дванадцять ядро-годин.
    Раніше ця колонка називалась «CPU-час» і читалась як «скільки грав» —
    тому одиниця тепер написана прямо в значенні, її неможливо не помітити. */
 function fcore(s){
   if(s==null) return "—";
-  if(s < 60) return Math.round(s)+" ядро-с";
-  if(s < 3600) return (s/60).toFixed(s<600?1:0)+" ядро-хв";
-  return (s/3600).toFixed(s<36000?1:0)+" ядро-год";
+  if(s < 60) return Math.round(s)+(EN?" core-s":" ядро-с");
+  if(s < 3600) return (s/60).toFixed(s<600?1:0)+(EN?" core-min":" ядро-хв");
+  return (s/3600).toFixed(s<36000?1:0)+(EN?" core-h":" ядро-год");
 }
 // час на годиннику: скільки хвилин програма справді щось робила
 function fmin(m){
   if(!m) return "—";
-  if(m < 60) return m+" хв";
-  return Math.floor(m/60)+" год "+String(m%60).padStart(2,"0")+" хв";
+  if(m < 60) return m+U_MIN;
+  return Math.floor(m/60)+U_H+" "+String(m%60).padStart(2,"0")+U_MIN;
 }
 function coreHint(a){
   if(!a.cpu_core_s) return "";
   const h=(a.cpu_core_s/3600);
+  if(EN){
+    if(!a.nmin) return `${h.toFixed(1)} core-hours of CPU time`;
+    const par=a.cpu_core_s/(a.nmin*60);
+    return `${h.toFixed(1)} core-h over ${a.nmin} min of activity — `
+         + `on average ${par.toFixed(1)} cores at once`;
+  }
   if(!a.nmin) return `${h.toFixed(1)} ядро-годин процесорного часу`;
   const par=a.cpu_core_s/(a.nmin*60);
   return `${h.toFixed(1)} ядро-год за ${a.nmin} хв роботи — `
@@ -798,8 +873,9 @@ async function api(p,opt){
   }
   return r.json();
 }
-function toast(html,ms=7000){ const t=$("#toast"); t.innerHTML=html; t.style.display="block";
-  clearTimeout(t._h); t._h=setTimeout(()=>t.style.display="none",ms); }
+function toast(html,ms=7000){ const el=$("#toast"); el.innerHTML=html;
+  translateNode(el); el.style.display="block";
+  clearTimeout(el._h); el._h=setTimeout(()=>el.style.display="none",ms); }
 
 /* ═══════════ ЗАХИСТ ВІД «З'ЯВИЛОСЬ І ПРОПАЛО» ═══════════
    Симптом трапляється щоразу, коли фонове оновлення перемальовує контейнер,
@@ -833,6 +909,7 @@ function dom(id){
       const el = $("#"+id);
       if(!el || el.__last === v) return;      // нічого не змінилось — не чіпаємо
       el.innerHTML = v; el.__last = v;
+      translateNode(el);                      // англійська накладається тут
     },
     get innerHTML(){ const el = $("#"+id); return el ? el.innerHTML : ""; },
   };
@@ -840,7 +917,8 @@ function dom(id){
 function stick(id, html){
   state.sticky = state.sticky || {};
   state.sticky[id] = html;
-  const el = $("#"+id); if(el){ el.innerHTML = html; el.__last = html; }
+  const el = $("#"+id); if(el){ el.innerHTML = html; el.__last = html;
+    translateNode(el); }
 }
 function unstick(id){
   if(state.sticky) delete state.sticky[id];
@@ -851,6 +929,7 @@ function restoreSticky(){
     const el = $("#"+id);
     if(el && el.innerHTML !== state.sticky[id]){
       el.innerHTML = state.sticky[id]; el.__last = state.sticky[id];
+      translateNode(el);
     }
   }
 }
@@ -871,6 +950,7 @@ if(HAS_CHART){ Chart.defaults.color="#8b94a7"; Chart.defaults.borderColor="#262c
   Chart.defaults.font.family='"Segoe UI",system-ui,sans-serif'; }
 function mkLine(ctx,datasets,labels,opts={}){
   if(!HAS_CHART||!ctx) return null;
+  datasets.forEach(ds=>{ if(ds.label) ds.label=t(ds.label); });
   return new Chart(ctx,{type:"line",
     data:{labels,datasets},
     options:Object.assign({
@@ -921,34 +1001,34 @@ async function loadStatus(){
     $("#livedot").style.background=(dead||state.statusMiss>2)?"#f87171":"#fbbf24";
     if(jobs.length){
       const j=jobs[0];
-      be.textContent=`зайнятий: ${j.what} · ${j.seconds}с`;
+      be.textContent=t(`зайнятий: ${j.what}`)+` · ${j.seconds}`+(EN?"s":"с");
       be.title=jobs.map(x=>`${x.what}${x.detail?" ("+x.detail+")":""} — ${x.seconds} с`)
                    .join("\n")+(jobs.length>1?`\n\nусього завдань: ${jobs.length}`:"");
     } else if(p){
       const age=p.sampler_age;
-      be.textContent = p.sampler_doing ? `збирач: ${p.sampler_doing}`
+      be.textContent = p.sampler_doing ? t(`збирач: ${p.sampler_doing}`)
         : (age!=null&&age>30 ? `збирач мовчить ${Math.round(age)}с` : "збирач зайнятий…");
       be.title="Монітор відповідає, але не встиг з відповіддю про стан."
         +(age!=null?`\nОстанній повний цикл: ${Math.round(age)} с тому.`:"");
     } else {
-      be.textContent = state.statusMiss>2?"збирач не відповідає":"збирач зайнятий…";
+      be.textContent = t(state.statusMiss>2?"збирач не відповідає":"збирач зайнятий…");
       be.title="Монітор не відповідає навіть на найпростіший запит. "
         +"Подивись logs/monitor.log.";
     }
     return; }
   $("#livedot").style.background="#4ade80";
   const et=s.etw||"—";
-  be.textContent="ETW: "+(et==="активний"||et.startsWith("активний")?"точні байти ✓":et);
+  be.textContent="ETW: "+t(et==="активний"||et.startsWith("активний")?"точні байти ✓":et);
   be.className="badge "+(et.startsWith("активний")?"ok":"warn");
-  be.title="Стан збору точних байтів мережі та DNS. "+et;
+  be.title=t("Стан збору точних байтів мережі та DNS.")+" "+t(et);
   // без адмінських прав бейдж стає кнопкою «полагодити»
   if(s.admin===false){
     be.style.cursor="pointer";
     be.title+="\nКлікни, щоб перезапустити монітор від імені адміністратора.";
     be.onclick=elevateNow;
   } else { be.style.cursor=""; be.onclick=null; }
-  bd.textContent="БД: "+fb(s.db_size);
-  bu.textContent="працює "+fdur(s.uptime_s);
+  bd.textContent=(EN?"DB: ":"БД: ")+fb(s.db_size);
+  bu.textContent=(EN?"up ":"працює ")+fdur(s.uptime_s);
   state.cmdAllowed=!!s.commands;
   updateTermUI();
 }
@@ -989,8 +1069,11 @@ async function loadOverview(){
 async function loadApps(){
   const d=await api("/api/apps?date="+state.date);
   state.apps=d.apps; renderApps(); renderSusp();
-  $("#foot").textContent="PC Monitor · дані в data/pcmon.sqlite3 · експорти в exports/ · "+
-    (d.minutes_available?"похвилинна деталізація доступна":"старий день: лише денні підсумки");
+  $("#foot").textContent=EN
+    ? "PC Monitor · data in data/pcmon.sqlite3 · exports in exports/ · "+
+      (d.minutes_available?"per-minute detail available":"old day: daily summaries only")
+    : "PC Monitor · дані в data/pcmon.sqlite3 · експорти в exports/ · "+
+      (d.minutes_available?"похвилинна деталізація доступна":"старий день: лише денні підсумки");
 }
 async function loadEvents(){
   const d=await api("/api/events?date="+state.date); state.events=d.events; renderEvents();
@@ -1012,9 +1095,9 @@ $("#cpu-mode").onclick=()=>{
 };
 function rate(bps){ // швидкість -> рядок
   if(!bps) return "";
-  if(bps<1024) return bps+" Б/с";
-  if(bps<1048576) return (bps/1024).toFixed(bps<102400?1:0)+" КБ/с";
-  return (bps/1048576).toFixed(1)+" МБ/с";
+  if(bps<1024) return bps+(EN?" B/s":" Б/с");
+  if(bps<1048576) return (bps/1024).toFixed(bps<102400?1:0)+(EN?" KB/s":" КБ/с");
+  return (bps/1048576).toFixed(1)+(EN?" MB/s":" МБ/с");
 }
 // підсвітка комірки залежно від «гарячості», як робить Диспетчер задач
 function heat(v,max){ if(!v) return "";
@@ -1112,12 +1195,16 @@ function renderLive(){
       <div class="v">${c.v}</div><div class="s">${c.s||""}</div></div>`).join("");
 
   const age=Math.max(0,Math.round(Date.now()/1000-d.ts));
-  let sub=`· оновлено ${age<3?"щойно":age+" с тому"} · ${d.ncpu} ядер · `+
-    `CPU ${d.cpu_total}%${d.core_max?` (пік ядра ${d.core_max}%)`:""} · `+
-    `RAM ${fb(d.ram_used)} з ${fb(d.ram_total)}`;
-  if(!d.gpu_ok) sub+=` · GPU: ${esc(d.gpu_status||"недоступно")}`;
-  if(d.mem_mode==="uss") sub+=" · пам'ять як у Диспетчері задач";
-  else if(d.mem_mode) sub+=` · пам'ять: ${esc(d.mem_mode)}`;
+  let sub=EN
+    ? `· updated ${age<3?"just now":age+" s ago"} · ${d.ncpu} cores · `+
+      `CPU ${d.cpu_total}%${d.core_max?` (core peak ${d.core_max}%)`:""} · `+
+      `RAM ${fb(d.ram_used)} of ${fb(d.ram_total)}`
+    : `· оновлено ${age<3?"щойно":age+" с тому"} · ${d.ncpu} ядер · `+
+      `CPU ${d.cpu_total}%${d.core_max?` (пік ядра ${d.core_max}%)`:""} · `+
+      `RAM ${fb(d.ram_used)} з ${fb(d.ram_total)}`;
+  if(!d.gpu_ok) sub+=` · GPU: ${esc(t(d.gpu_status||"недоступно"))}`;
+  if(d.mem_mode==="uss") sub+=EN?" · memory as in Task Manager":" · пам'ять як у Диспетчері задач";
+  else if(d.mem_mode) sub+=(EN?" · memory: ":" · пам'ять: ")+esc(d.mem_mode);
   $("#live-sub").textContent=sub;
   note.style.display="none";
 
@@ -1131,7 +1218,7 @@ function renderLive(){
     th.classList.toggle("sorted",th.dataset.lk===k));
 
   if(!list.length){ body.innerHTML='<tr><td colspan="7" class="muted" style="padding:14px">'+
-    (s?"Нічого не знайдено":"Немає даних")+"</td></tr>"; return; }
+    t(s?"Нічого не знайдено":"Немає даних")+"</td></tr>"; return; }
   // максимуми для підсвітки
   const mx={disk_bps:Math.max(1,...list.map(a=>a.disk_bps)),
             net_bps:Math.max(1,...list.map(a=>a.net_bps)),
@@ -1157,6 +1244,7 @@ function renderLive(){
       <td${heat(a.net_bps,mx.net_bps)}>${rate(a.net_bps)||"—"}</td>
       <td${heat(a.gpu_pct,100)}>${a.gpu_pct?a.gpu_pct.toFixed(1)+"%":"—"}</td>
       <td class="muted">${a.nproc}</td></tr>`;}).join("");
+  translateNode(body);
   sc.scrollTop=keep;   // не смикати список під час оновлення
 }
 document.querySelectorAll("#live-table th[data-lk]").forEach(th=>{
@@ -1213,8 +1301,8 @@ function renderApps(){
   const tb=$("#apps-body"); tb.innerHTML="";
   $("#apps-count").textContent="("+list.length+")";
   $("#apps-empty").style.display=list.length?"none":"block";
-  $("#apps-empty").textContent=state.apps.length?"Нічого не знайдено":
-    "Ще збираються дані — зачекай хвилину-дві після запуску монітора.";
+  $("#apps-empty").textContent=t(state.apps.length?"Нічого не знайдено":
+    "Ще збираються дані — зачекай хвилину-дві після запуску монітора.");
   for(const a of list){
     const tr=document.createElement("tr");
     tr.className="approw"; tr.dataset.name=a.name;
@@ -1241,6 +1329,7 @@ function renderApps(){
       d.className="detail"; d.innerHTML='<td colspan="15">Завантажую…</td>';
       tb.appendChild(d); fillDetail(a,d); }
   }
+  translateNode(tb);
 }
 function renderSusp(){
   const list=state.apps.filter(a=>a.suspicious)
@@ -1935,6 +2024,7 @@ function renderTemps(){
   if(state.tempsErr && !d){
     strip.innerHTML=`<span class="tchip"><b>🌡 датчики</b>
       <span class="tv muted" style="font-size:12.5px">${esc(state.tempsErr)}</span></span>`;
+    translateNode(strip);
     return;
   }
   if(!d){ strip.innerHTML=""; return; }
@@ -1971,6 +2061,7 @@ function renderTemps(){
       :`<span class="tchip"><b>🌡 температури</b>
          <span class="tv muted" style="font-size:12.5px">датчики не відповіли</span></span>`)
     +`<button class="tbtn" onclick="toggleTemps()">${state.tempsOpen?"згорнути":"детальніше"}</button>`;
+  translateNode(strip);
 
   if(!more) return;
   if(!state.tempsOpen){ more.innerHTML=""; return; }
@@ -1993,6 +2084,7 @@ function renderTemps(){
       тому, що ставлять власний драйвер рівня ядра.</div></div>
     <div style="margin-top:10px"><b style="font-size:13px">Джерела</b>${src}</div>
   </div>`;
+  translateNode(more);
 }
 
 function toggleTemps(){ state.tempsOpen=!state.tempsOpen;
@@ -2123,7 +2215,8 @@ $("#h-deep").onclick =()=>{
 };
 
 /* ═══════════ ЗАТРИМКИ ═══════════ */
-function us(v){ return v>=1000 ? (v/1000).toFixed(v>=10000?0:2)+" мс" : Math.round(v)+" мкс"; }
+function us(v){ return v>=1000 ? (v/1000).toFixed(v>=10000?0:2)+(EN?" ms":" мс")
+                               : Math.round(v)+(EN?" µs":" мкс"); }
 // хто винен: драйвери чи конкретна програма
 function renderAttribution(r){
   const a=r.attribution;
@@ -2517,7 +2610,7 @@ async function loadSettings(){
     return; }
   state.cfg=d;
   const c=d.config, a=d.autostart;
-  const daysWord=n=>n===1?"день":(n>=2&&n<=4?"дні":"днів");
+  const daysWord=n=>EN?(n===1?"day":"days"):(n===1?"день":(n>=2&&n<=4?"дні":"днів"));
   dom("cfg-body").innerHTML=`
     ${state.needsRestart?`<div class="needs-restart">
       <span>⟳</span><div style="flex:1">Частина змін застосується після перезапуску збору.</div>
@@ -2638,7 +2731,7 @@ async function loadSettings(){
         <span>Зберігаються значно довше, бо займають мало місця</span></div>
         <div class="ctl"><input type="number" id="i-rday" min="1" max="3650" value="${c.retention_days}"> <span class="muted">дн.</span></div></div>
       <div class="cfg-row"><div class="lbl"><b>База даних</b>
-        <span>${fb(d.db_size)} · зібрано за ${d.days_collected} ${daysWord(d.days_collected)}</span></div>
+        <span>${fb(d.db_size)} · ${EN?"collected over":"зібрано за"} ${d.days_collected} ${daysWord(d.days_collected)}</span></div>
         <div class="ctl"><button class="btn small" onclick="doVacuum()">Стиснути</button>
           <button class="btn small" onclick="doPurge()">Очистити історію</button></div></div>
       <div class="cfg-row"><div class="lbl"><b>Загальний звіт для аналізу</b>
@@ -2656,7 +2749,7 @@ async function loadSettings(){
     <div class="panel cfg-sec"><h2>Про програму</h2>
       <div class="cfg-row"><div class="lbl">
         <b>PC Monitor ${esc(d.version)}</b>
-        <span>Python ${esc(d.python)} · права адміністратора: ${d.admin?"є":"нема"}<br>
+        <span>Python ${esc(d.python)} · ${EN?"administrator rights:":"права адміністратора:"} ${d.admin?(EN?"yes":"є"):(EN?"no":"нема")}<br>
         Усі дані лишаються на цьому комп'ютері. Нічого нікуди не надсилається.</span></div></div>
       <div class="cfg-row"><div class="lbl"><b>Оновлюватися з GitHub</b>
         <span>Раз на кілька годин монітор питає github.com/${"Amriel/PCmonitor"},
@@ -2763,7 +2856,7 @@ function updateTermUI(){
   a.textContent=open?"▾":"▸";
   $("#term-body").style.display=(open&&allowed)?"block":"none";
   $("#term-off").style.display=(open&&!allowed)?"block":"none";
-  $("#term-note").textContent=allowed?"":"вимкнено";
+  $("#term-note").textContent=allowed?"":t("вимкнено");
 }
 try{ state.termOpen=!!localStorage.getItem("pcmon.term"); }catch(e){}
 window.toggleTerm=toggleTerm;
@@ -3044,6 +3137,11 @@ setInterval(()=>{ if(state.live && state.tab!=="now" && state.date===today()
 setInterval(loadStatus,15000);
 
 (async()=>{ $("#live").classList.add("active");
+  // мова: перекласти статичну розмітку і налаштувати перемикач
+  translateNode(document.body);
+  const lb=$("#langbtn");
+  lb.textContent = LANG==="en" ? "УКР" : "EN";
+  lb.onclick = ()=>setLang(LANG==="en"?"uk":"en");
   bindTerminal(); updateTermUI();   // термінал у «Зараз» — статична розмітка
   let t="now"; try{ t=localStorage.getItem("pcmon.tab")||"now"; }catch(e){}
   try{

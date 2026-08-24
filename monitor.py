@@ -94,6 +94,9 @@ DEFAULT_CONFIG = {
     # задачу планувальника БЕЗ запиту UAC; інакше з'явиться звичайний запит.
     # Відмовився від UAC — монітор просто працює зі звичайними правами.
     "run_as_admin": True,
+    # Мова інтерфейсу: "uk" або "en". Веб-сторінка тримає свій вибір у
+    # браузері, а це значення — для решти (меню трея).
+    "lang": "uk",
     # Оновлення з GitHub Releases (єдине мережеве звернення апки, і його
     # можна вимкнути). Раз на кілька годин: HTTPS-запит до api.github.com,
     # і якщо там новіша версія — інсталятор завантажується в updates\
@@ -2835,6 +2838,9 @@ def make_handler(ctx: Ctx):
                 elif path == "/chart.umd.js":
                     self._file(os.path.join(WEB_DIR, "chart.umd.js"),
                                "application/javascript; charset=utf-8")
+                elif path == "/i18n_en.js":
+                    self._file(os.path.join(WEB_DIR, "i18n_en.js"),
+                               "application/javascript; charset=utf-8")
                 elif path == "/api/status":
                     self._json(self.status())
                 elif path == "/api/update":
@@ -3526,11 +3532,16 @@ def start_tray(cfg):
     def _quit(icon, item):
         icon.stop()
         shutdown()
+    en = str(cfg.get("lang", "uk")).lower() == "en"
     menu = pystray.Menu(
-        pystray.MenuItem("Відкрити PC Monitor", _open, default=True),
-        pystray.MenuItem("Папка експортів", _exports),
-        pystray.MenuItem("Вийти (зупинити моніторинг)", _quit))
-    icon = pystray.Icon("PC Monitor", img, "PC Monitor — збирає статистику", menu)
+        pystray.MenuItem("Open PC Monitor" if en else "Відкрити PC Monitor",
+                         _open, default=True),
+        pystray.MenuItem("Exports folder" if en else "Папка експортів", _exports),
+        pystray.MenuItem("Quit (stop monitoring)" if en
+                         else "Вийти (зупинити моніторинг)", _quit))
+    icon = pystray.Icon("PC Monitor", img,
+                        "PC Monitor — collecting stats" if en
+                        else "PC Monitor — збирає статистику", menu)
     t = threading.Thread(target=icon.run, name="tray", daemon=True)
     t.start()
     return icon
@@ -3912,24 +3923,40 @@ def run_collector(cfg, with_tray=True, console=False):
     except KeyboardInterrupt:
         pass
     shutdown()
+
+    # Кожен крок зупинки — під жорстким таймаутом і з заміром часу.
+    # Причина: зупинка ETW (pywintrace) може дожовувати буфери ХВИЛИНАМИ,
+    # і перезапуск із налаштувань виглядав як «збирач помер» на 2-3 хв.
+    # Потоки daemon — покинути завислий крок безпечно, процес все одно
+    # завершується.
+    def _timed_stop(name, fn, timeout):
+        t0 = time.monotonic()
+        th = threading.Thread(target=lambda: fn(), name="stop-" + name, daemon=True)
+        th.start()
+        th.join(timeout)
+        took = time.monotonic() - t0
+        if th.is_alive():
+            log.warning("Зупинка: %s завис (чекав %.1f с) — покидаю", name, took)
+        elif took > 1:
+            log.info("Зупинка: %s — %.1f с", name, took)
+
+    t_stop = time.monotonic()
     if etw:
-        etw.stop()
+        _timed_stop("ETW", etw.stop, 10)
     # Порядок важливий: спершу даємо збирачу дописати свої останні дані
     # (він закриває відкриті процеси), і лише потім зупиняємо писаря.
     sampler.join(timeout=8)
     if sampler.gpu:
-        sampler.gpu.stop()
+        _timed_stop("GPU-лічильники", sampler.gpu.stop, 5)
     writer.finish.set()
     writer.join(timeout=15)
+    log.info("Зупинка зайняла %.1f с", time.monotonic() - t_stop)
     try:
         os.remove(TOKEN_PATH)   # токен мертвої сесії нікому не потрібен
     except OSError:
         pass
     if tray:
-        try:
-            tray.stop()
-        except Exception:
-            pass
+        _timed_stop("трей", tray.stop, 5)
 
     if _restart_requested:
         log.info("Стартую наново з новими налаштуваннями")

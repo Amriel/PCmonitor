@@ -32,14 +32,21 @@ ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=no
 
 [Languages]
+Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "ukrainian"; MessagesFile: "compiler:Languages\Ukrainian.isl"
+
+[CustomMessages]
+english.DesktopIcon=Desktop icon
+ukrainian.DesktopIcon=Значок на робочому столі
+english.LaunchApp=Launch PC Monitor
+ukrainian.LaunchApp=Запустити PC Monitor
 
 ; Автозапуску тут навмисно НЕМАЄ: апка має власний (Налаштування → «Запускати
 ; разом із Windows»), і він кращий — стартує через планувальник з правами
 ; адміністратора, тож ETW (точні байти мережі) працює. Два механізми поруч
 ; означали б подвійний старт при вході в систему.
 [Tasks]
-Name: "desktopicon"; Description: "Значок на робочому столі"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:DesktopIcon}"; Flags: unchecked
 
 [Files]
 Source: "dist\PCMonitor\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
@@ -51,7 +58,7 @@ Name: "{autodesktop}\PC Monitor"; Filename: "{app}\PCMonitor.exe"; Tasks: deskto
 [Run]
 ; postinstall без skipifsilent: після ТИХОГО оновлення (/VERYSILENT з апки)
 ; монітор теж має піднятись сам — сторінка чекає на нього і перезавантажиться.
-Filename: "{app}\PCMonitor.exe"; Description: "Запустити PC Monitor"; \
+Filename: "{app}\PCMonitor.exe"; Description: "{cm:LaunchApp}"; \
   Flags: nowait postinstall
 
 [UninstallRun]

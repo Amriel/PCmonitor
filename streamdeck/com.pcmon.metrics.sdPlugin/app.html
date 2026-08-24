@@ -21,25 +21,29 @@ let ws = null, uuid = "";
 const keys = new Map();          // context -> {settings, series}
 let data = null, lastOk = 0;
 
+// Мова написів на клавішах: обирається в налаштуваннях клавіші (PI).
+// en-заголовок лежить поруч у полі te; чого нема — лишається українською.
+let LANG = "uk";
 const METRICS = {
-  cpu:       { title: "Процесор",  unit: "%",   max: 100, color: "#4ade80" },
-  core_max:  { title: "Пік ядра",  unit: "%",   max: 100, color: "#fbbf24" },
-  ram_pct:   { title: "Пам'ять",   unit: "%",   max: 100, color: "#a78bfa" },
-  gpu:       { title: "GPU",       unit: "%",   max: 100, color: "#60a5fa" },
-  net:       { title: "Мережа",    unit: "bps", max: 0,   color: "#f472b6" },
-  disk:      { title: "Диск",      unit: "bps", max: 0,   color: "#38bdf8" },
+  cpu:       { title: "Процесор",  te: "CPU",       unit: "%",   max: 100, color: "#4ade80" },
+  core_max:  { title: "Пік ядра",  te: "Core peak", unit: "%",   max: 100, color: "#fbbf24" },
+  ram_pct:   { title: "Пам'ять",   te: "Memory",    unit: "%",   max: 100, color: "#a78bfa" },
+  gpu:       { title: "GPU",       te: "GPU",       unit: "%",   max: 100, color: "#60a5fa" },
+  net:       { title: "Мережа",    te: "Network",   unit: "bps", max: 0,   color: "#f472b6" },
+  disk:      { title: "Диск",      te: "Disk",      unit: "bps", max: 0,   color: "#38bdf8" },
   // температури й відеопам'ять
-  gpu_temp:  { title: "GPU темп.", unit: "°C",  max: 95,  color: "#fb923c", warn: 83 },
-  disk_temp: { title: "Диск темп.",unit: "°C",  max: 80,  color: "#f59e0b", warn: 60 },
-  vram_pct:  { title: "Відеопам'ять", unit: "%", max: 100, color: "#c084fc", warn: 92 },
+  gpu_temp:  { title: "GPU темп.", te: "GPU temp",  unit: "°C",  max: 95,  color: "#fb923c", warn: 83 },
+  disk_temp: { title: "Диск темп.",te: "Disk temp", unit: "°C",  max: 80,  color: "#f59e0b", warn: 60 },
+  vram_pct:  { title: "Відеопам'ять", te: "VRAM",   unit: "%", max: 100, color: "#c084fc", warn: 92 },
   // Назва без слова «вільно»: що саме показує клавіша, людина обрала сама
   // в її налаштуваннях — дублювати це на екрані немає сенсу.
-  vram_free: { title: "Відеопам'ять", unit: "B", max: 0,   color: "#34d399",
+  vram_free: { title: "Відеопам'ять", te: "VRAM",   unit: "B", max: 0,   color: "#34d399",
                invert: true },     // тут менше = гірше, тому поріг навпаки
   // зведена клавіша: пам'ять великим, температура під нею
-  gpu_all:   { title: "GPU", unit: "combo", max: 100, color: "#c084fc" },
-  ram_all:   { title: "Пам'ять", unit: "combo", max: 100, color: "#a78bfa" },
+  gpu_all:   { title: "GPU", te: "GPU", unit: "combo", max: 100, color: "#c084fc" },
+  ram_all:   { title: "Пам'ять", te: "Memory", unit: "combo", max: 100, color: "#a78bfa" },
 };
+const mTitle = M => (LANG === "en" && M.te) ? M.te : M.title;
 
 function connectElgatoStreamDeckSocket(inPort, inUUID, inRegisterEvent, inInfo) {
   uuid = inUUID;
@@ -50,12 +54,15 @@ function connectElgatoStreamDeckSocket(inPort, inUUID, inRegisterEvent, inInfo) 
     const ctx = m.context;
     if (m.event === "willAppear") {
       keys.set(ctx, { settings: m.payload.settings || {}, series: [] });
+      if ((m.payload.settings || {}).lang) LANG = m.payload.settings.lang;
       draw(ctx);
     } else if (m.event === "willDisappear") {
       keys.delete(ctx);
     } else if (m.event === "didReceiveSettings") {
       const k = keys.get(ctx);
-      if (k) { k.settings = m.payload.settings || {}; draw(ctx); }
+      if (k) { k.settings = m.payload.settings || {};
+        if (k.settings.lang) LANG = k.settings.lang;
+        draw(ctx); }
     } else if (m.event === "keyDown") {
       // натиск нічого не змінює в системі — просто оновлюємо негайно
       poll();
@@ -149,7 +156,7 @@ function draw(ctx) {
   const isRate = M.unit === "bps";
   const isBytes = M.unit === "B";
   const isTemp = M.unit === "°C";
-  const title = s.label || M.title;
+  const title = s.label || mTitle(M);
 
   // Датчика може просто не бути (немає NVIDIA, диск не віддає температуру).
   // Показати нуль було б брехнею, тому пишемо прочерк і пояснення.
@@ -220,11 +227,11 @@ function draw(ctx) {
   let sub = "";
   if (key === "cpu" && data.ncpu) sub = data.ncpu + " " + plural(data.ncpu);
   else if (key === "ram_pct" && data.ram_total)
-    sub = (data.ram_used / 1073741824).toFixed(1) + " з "
+    sub = (data.ram_used / 1073741824).toFixed(1) + (LANG==="en"?" of ":" з ")
         + (data.ram_total / 1073741824).toFixed(0) + " ГіБ";
   else if (key === "core_max") sub = "найгарячіше";
   else if ((key === "vram_pct" || key === "vram_free") && data.vram_total)
-    sub = (data.vram_used / 1073741824).toFixed(1) + " з "
+    sub = (data.vram_used / 1073741824).toFixed(1) + (LANG==="en"?" of ":" з ")
         + (data.vram_total / 1073741824).toFixed(0) + " ГіБ";
   else if (key === "gpu_temp" && data.gpu_fan != null)
     sub = "вентилятор " + data.gpu_fan + "%";
@@ -307,7 +314,7 @@ function drawGpuAll(g, c, ctx, s) {
   if (total) {
     // Просто «з N ГБ»: режим (зайнято чи вільно) людина обрала сама
     // в налаштуваннях клавіші, повторювати це на екрані зайве.
-    const of = "з " + fmtBytes(total);
+    const of = (LANG==="en"?"of ":"з ") + fmtBytes(total);
     fitText(g, of, W - 8, 19, 500);
     g.fillStyle = "#A8B3C7"; g.fillText(of, W / 2, 78);
   }
@@ -375,7 +382,7 @@ function drawRamAll(g, c, ctx, s) {
   g.fillStyle = hot ? "#fca5a5" : "#ffffff";
   g.fillText(memText, W / 2, 62);
 
-  const of = "з " + fmtBytes(total);
+  const of = (LANG==="en"?"of ":"з ") + fmtBytes(total);
   fitText(g, of, W - 8, 19, 500);
   g.fillStyle = "#A8B3C7"; g.fillText(of, W / 2, 78);
 
