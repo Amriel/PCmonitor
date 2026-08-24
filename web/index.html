@@ -2658,10 +2658,20 @@ async function loadSettings(){
         <b>PC Monitor ${esc(d.version)}</b>
         <span>Python ${esc(d.python)} · права адміністратора: ${d.admin?"є":"нема"}<br>
         Усі дані лишаються на цьому комп'ютері. Нічого нікуди не надсилається.</span></div></div>
-      <div class="cfg-row"><div class="lbl"><b>Оновлення</b>
-        <span>Локальні і безпечні: збери нову версію через <b>build.bat</b> —
-        готовий інсталятор потрапить у папку <b>updates</b>, і його можна
-        поставити звідси одним кліком. З інтернету нічого не завантажується.</span></div>
+      <div class="cfg-row"><div class="lbl"><b>Оновлюватися з GitHub</b>
+        <span>Раз на кілька годин монітор питає github.com/${"Amriel/PCmonitor"},
+        чи є новіший реліз, і завантажує інсталятор у папку <b>updates</b>
+        з перевіркою SHA-256. Це <b>єдине</b> мережеве звернення апки.
+        Діє з наступного запуску.</span></div>
+        <div class="ctl">${swHtml("sw-ghupd",c.github_updates!==false)}</div></div>
+      <div class="cfg-row"><div class="lbl"><b>Встановлювати автоматично</b>
+        <span>Без цієї галочки завантажене оновлення чекає на твій клік.
+        З нею — ставиться саме, щойно завантажилось (монітор перезапуститься).</span></div>
+        <div class="ctl">${swHtml("sw-ghauto",!!c.auto_install_updates)}</div></div>
+      <div class="cfg-row"><div class="lbl"><b>Перевірити зараз</b>
+        <span>Подивитись GitHub і папку updates просто зараз. Локальний шлях
+        теж працює: поклади інсталятор у <b>updates</b> вручну (build.bat
+        робить це сам).</span></div>
         <div class="ctl"><button class="btn small" onclick="checkUpdate()">Перевірити</button></div></div>
       <div id="upd-res"></div>
     </div>`;
@@ -2693,6 +2703,7 @@ async function loadSettings(){
     };};
   t("sw-auto","autostart"); t("sw-tray","traypin");
   t("sw-adm","run_as_admin");
+  t("sw-ghupd","github_updates"); t("sw-ghauto","auto_install_updates");
   t("sw-etw","etw_enabled"); t("sw-gpu","gpu_enabled");
   t("sw-cmd","log_cmdline"); t("sw-sig","sig_check"); t("sw-hash","hash_new_exes");
   // вмикання командного рядка одразу перемальовує розділ, щоб з'явилось поле
@@ -2843,14 +2854,19 @@ window.elevateNow=elevateNow;
 
 /* ═══════════ ОНОВЛЕННЯ ═══════════ */
 async function checkUpdate(){
-  stick("upd-res",'<div class="muted" style="font-size:12.5px">дивлюся в папку updates…</div>');
+  stick("upd-res",'<div class="muted" style="font-size:12.5px">питаю GitHub і дивлюся в папку updates… (завантаження може тривати хвилину)</div>');
   let r;
-  try{ r=await api("/api/update"); }
+  try{ r=await api("/api/update?check=1"); }
   catch(e){ stick("upd-res",`<div class="warnbox"><span>⚠</span><div>${esc(e.message)}</div></div>`); return; }
+  const g=r.github||{};
+  const ghLine=g.enabled===false
+    ?"Перевірка GitHub вимкнена в налаштуваннях."
+    :g.error?`GitHub: ${esc(g.error)}`
+    :g.latest?`GitHub: остання версія ${esc(g.latest)}.`
+    :"";
   if(!r.available){
     stick("upd-res",`<div class="muted" style="font-size:12.5px">Оновлень немає:
-      поточна версія ${esc(r.version)} — найновіша. Монітор дивиться в
-      <b>${esc(r.updates_dir)}</b> і чекає файл PCMonitor-Setup-X.Y.Z.exe.</div>`);
+      поточна версія ${esc(r.version)} — найновіша. ${ghLine}</div>`);
     return;
   }
   stick("upd-res",`<div class="warnbox"><span>⬆</span><div>

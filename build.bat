@@ -69,6 +69,11 @@ if not defined ISCC (
 "%ISCC%" /Qp /DAppVer=%VER% installer.iss
 if errorlevel 1 ( echo  [ERROR] Inno Setup failed & pause & exit /b 1 )
 
+rem --- SHA-256 next to the installer: attach BOTH files to the GitHub
+rem     release, and the app will verify the download against this hash ---
+certutil -hashfile "dist\PCMonitor-Setup-%VER%.exe" SHA256 ^
+  | findstr /r "^[0-9a-f][0-9a-f]*$" > "dist\PCMonitor-Setup-%VER%.exe.sha256"
+
 rem --- drop into updates\ so the app can self-update from Settings ---
 if not exist updates mkdir updates
 copy /y "dist\PCMonitor-Setup-%VER%.exe" "updates\" >nul
@@ -78,7 +83,11 @@ echo  ============================================
 echo   Done.
 echo   App:       dist\PCMonitor\PCMonitor.exe
 echo   Installer: dist\PCMonitor-Setup-%VER%.exe
+echo   Checksum:  dist\PCMonitor-Setup-%VER%.exe.sha256
 echo              (copied to updates\ - the app will
 echo               offer it in Settings -^> Updates)
+echo.
+echo   GitHub release (attach BOTH installer and .sha256):
+echo     gh release create v%VER% dist\PCMonitor-Setup-%VER%.exe dist\PCMonitor-Setup-%VER%.exe.sha256 --title "PC Monitor %VER%"
 echo  ============================================
 pause

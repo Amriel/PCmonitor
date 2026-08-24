@@ -172,10 +172,13 @@ program that does not need Python:
    `%LocalAppData%\Programs\PC Monitor`, and **never touches** the
    database on update or uninstall.
 
-**Updates** are local and offline by design: the built installer lands in
-`updates\`, and the running app offers it under Settings → "About" →
-"Check". One click — the old version shuts down cleanly, the new one
-takes its place and starts itself.
+**Updates.** The app checks this repository's GitHub Releases every few
+hours (its only network call, disabled with one switch), downloads a
+newer installer into `updates\` over HTTPS, and verifies it against the
+`.sha256` file attached to the release. Installing takes one click in
+Settings → "About" → "Check" — or fully automatically if you enable
+"Install automatically". The offline path still works too: drop an
+installer into `updates\` yourself (build.bat does this for you).
 
 ---
 

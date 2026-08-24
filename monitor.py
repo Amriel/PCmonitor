@@ -55,8 +55,9 @@ sys.path.insert(0, BASE)
 import psutil  # noqa: E402
 import suspicion  # noqa: E402
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 IS_WIN = sys.platform == "win32"
+GITHUB_REPO = "Amriel/PCmonitor"   # звідки апка бере нові релізи
 
 # Без консолі (pythonw, зібраний exe) stdout/stderr — None, і будь-який
 # print() падав би з AttributeError. Підставляємо «нікуди», щоб службові
@@ -93,6 +94,13 @@ DEFAULT_CONFIG = {
     # задачу планувальника БЕЗ запиту UAC; інакше з'явиться звичайний запит.
     # Відмовився від UAC — монітор просто працює зі звичайними правами.
     "run_as_admin": True,
+    # Оновлення з GitHub Releases (єдине мережеве звернення апки, і його
+    # можна вимкнути). Раз на кілька годин: HTTPS-запит до api.github.com,
+    # і якщо там новіша версія — інсталятор завантажується в updates\
+    # з перевіркою SHA-256. ВСТАНОВЛЕННЯ — за кліком людини, якщо не
+    # ввімкнено auto_install_updates.
+    "github_updates": True,
+    "auto_install_updates": False,
     # Виконання команд із вікна монітора. ВИМКНЕНО за замовчуванням свідомо:
     # це найпотужніша можливість застосунку, і вмикати її має людина, а не
     # оновлення. Команди виконуються від звичайного користувача навіть тоді,
@@ -262,6 +270,121 @@ def find_update():
         return None
     return {"version": ".".join(map(str, best[0])), "file": best[1],
             "size": os.path.getsize(best[1])}
+
+
+# стан останньої перевірки GitHub — щоб UI міг чесно сказати, що відбулось
+_gh_state = {"last_check": 0, "latest": "", "error": "", "downloaded": ""}
+_gh_lock = threading.Lock()
+
+
+def _gh_get(url, timeout=20):
+    import urllib.request
+    req = urllib.request.Request(url, headers={
+        "User-Agent": f"PCMonitor/{VERSION}",
+        "Accept": "application/vnd.github+json"})
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
+def _download_verified(url, target, expect_sha=None, max_bytes=300 * 1024 * 1024):
+    """Завантажити файл у target: потоково, з лімітом розміру і SHA-256."""
+    import hashlib
+    part = target + ".part"
+    h = hashlib.sha256()
+    total = 0
+    with _gh_get(url, timeout=30) as r, open(part, "wb") as f:
+        while True:
+            chunk = r.read(256 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise ValueError("файл завеликий — обриваю завантаження")
+            h.update(chunk)
+            f.write(chunk)
+            if STOP.is_set():
+                raise InterruptedError("монітор зупиняється")
+    got = h.hexdigest().lower()
+    if expect_sha and got != expect_sha.lower():
+        try:
+            os.remove(part)
+        except OSError:
+            pass
+        raise ValueError(f"SHA-256 не збігається: очікував {expect_sha[:16]}…, "
+                         f"отримав {got[:16]}… — файл відкинуто")
+    os.replace(part, target)
+    return got
+
+
+def check_github_update(cfg, download=True):
+    """
+    Перевірити останній реліз на GitHub і, якщо він новіший, завантажити
+    інсталятор у updates\\ — далі працює звичайний локальний механізм
+    (find_update / install_update). Це ЄДИНЕ мережеве звернення монітора,
+    воно вимикається одним перемикачем, іде тільки на api.github.com по
+    HTTPS і приймає лише файл за суворим шаблоном імені з перевіркою
+    SHA-256 (якщо в релізі є файл-хеш).
+    """
+    if not cfg.get("github_updates", True):
+        return {"enabled": False}
+    out = {"enabled": True, "repo": GITHUB_REPO}
+    try:
+        with _gh_get(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest") as r:
+            rel = json.loads(r.read().decode("utf-8"))
+        assets = rel.get("assets") or []
+        best = None
+        for a in assets:
+            m = _SETUP_RE.match(a.get("name") or "")
+            if m:
+                v = tuple(int(x) for x in m.groups())
+                if best is None or v > best[0]:
+                    best = (v, a)
+        with _gh_lock:
+            _gh_state["last_check"] = int(time.time())
+        if not best:
+            raise ValueError("у релізі немає файлу PCMonitor-Setup-X.Y.Z.exe")
+        ver = ".".join(map(str, best[0]))
+        with _gh_lock:
+            _gh_state["latest"] = ver
+            _gh_state["error"] = ""
+        out["latest"] = ver
+        out["newer"] = best[0] > _ver_tuple(VERSION)
+        if not out["newer"] or not download:
+            return out
+        a = best[1]
+        os.makedirs(UPDATES_DIR, exist_ok=True)
+        target = os.path.join(UPDATES_DIR, a["name"])
+        if not os.path.exists(target):
+            # окремий файл-хеш поруч у релізі (його робить build.bat)
+            sha = None
+            for s in assets:
+                if s.get("name") == a["name"] + ".sha256":
+                    try:
+                        with _gh_get(s["browser_download_url"], timeout=15) as rr:
+                            sha = rr.read().decode("utf-8", "replace").split()[0]
+                    except Exception:
+                        log.warning("Не вдалося прочитати файл-хеш — "
+                                    "перевірю лише цілісність за розміром")
+                    break
+            log.info("Завантажую оновлення %s з GitHub…", ver)
+            _download_verified(a["browser_download_url"], target, expect_sha=sha)
+            log.info("Оновлення %s завантажено%s", ver,
+                     " і перевірено за SHA-256" if sha else "")
+        with _gh_lock:
+            _gh_state["downloaded"] = ver
+        out["downloaded"] = True
+        return out
+    except Exception as e:
+        msg = str(e)[:200]
+        with _gh_lock:
+            _gh_state["error"] = msg
+            _gh_state["last_check"] = int(time.time())
+        out["error"] = msg
+        return out
+
+
+def github_update_status():
+    with _gh_lock:
+        return dict(_gh_state)
 
 
 def install_update():
@@ -2715,9 +2838,17 @@ def make_handler(ctx: Ctx):
                 elif path == "/api/status":
                     self._json(self.status())
                 elif path == "/api/update":
+                    gh = None
+                    if qs.get("check") == "1":
+                        # ручна перевірка: сходити на GitHub просто зараз
+                        # (і завантажити, якщо є новіше)
+                        gh = check_github_update(ctx.cfg)
                     self._json({"version": VERSION, "frozen": FROZEN,
                                 "updates_dir": UPDATES_DIR,
-                                "available": find_update()})
+                                "available": find_update(),
+                                "github": gh or {"enabled": bool(
+                                    ctx.cfg.get("github_updates", True)),
+                                    **github_update_status()}})
                 elif path == "/api/temps":
                     import sensors as _s
                     self._json(_s.read_all(force=qs.get("force") == "1"))
@@ -3732,6 +3863,22 @@ def run_collector(cfg, with_tray=True, console=False):
     sampler.start()
     poller.start()
     threading.Thread(target=_httpd.serve_forever, name="http", daemon=True).start()
+
+    # Фонова перевірка оновлень на GitHub: перший раз за 2 хвилини після
+    # старту, далі кожні 6 годин. Лише коли ввімкнено в налаштуваннях.
+    def _gh_loop():
+        STOP.wait(120)
+        while not STOP.is_set():
+            try:
+                if cfg.get("github_updates", True):
+                    r = check_github_update(cfg)
+                    if r.get("downloaded") and cfg.get("auto_install_updates"):
+                        log.info("Автовстановлення оновлення (увімкнено в налаштуваннях)")
+                        install_update()
+            except Exception:
+                log.exception("Перевірка оновлень з GitHub не вдалася")
+            STOP.wait(6 * 3600)
+    threading.Thread(target=_gh_loop, name="ghupdate", daemon=True).start()
 
     # Токен сесії — у файл, щоб stop.bat міг чемно попросити зупинку.
     # Без цього stop.bat отримував 403 і завершував монітор силоміць
