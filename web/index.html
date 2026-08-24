@@ -1699,12 +1699,14 @@ function closeProc(){ $("#pmodal").classList.remove("open"); state.procOpen=null
 window.closeProc=closeProc;
 document.addEventListener("keydown",e=>{ if(e.key==="Escape") closeProc(); });
 
-async function openProc(name){
+async function openProc(name, attempt=0){
   state.procOpen=name;
   $("#pmodal").classList.add("open");
   $("#pm-name").textContent=name;
-  $("#pm-path").textContent="";
-  $("#pm-body").innerHTML='<div class="empty">Збираю дані…</div>';
+  if(!attempt){
+    $("#pm-path").textContent="";
+    $("#pm-body").innerHTML='<div class="empty">Збираю дані…</div>';
+  }
   let d;
   try{
     // не чекаємо вічно: якщо збір затягнувся — показуємо це, а не «збираю дані»
@@ -1717,10 +1719,22 @@ async function openProc(name){
     d=await r.json();
   }
   catch(e){
-    const msg = e.name==="AbortError"
-      ? "Збір даних триває надто довго. Спробуй ще раз — або надішли мені загальний звіт (⚙ Налаштування)."
-      : "Помилка: "+esc(e.message);
-    $("#pm-body").innerHTML=`<div class="empty">${msg}</div>`; return; }
+    if(e.name==="AbortError"){
+      $("#pm-body").innerHTML='<div class="empty">Збір даних триває надто довго. '
+        +'Спробуй ще раз — або надішли мені загальний звіт (⚙ Налаштування).</div>';
+      return;
+    }
+    // «Failed to fetch» — сервер недоступний. Найчастіше це просто збирач
+    // перезапускається (зі зміни налаштувань чи оновлення) — не показуємо
+    // мертву помилку, а тихо пробуємо ще, поки картку не закрили.
+    if(attempt<10 && state.procOpen===name){
+      $("#pm-body").innerHTML=`<div class="empty">Збирач не відповідає — схоже,
+        перезапускається. Спробую ще раз… (${attempt+1}/10)</div>`;
+      setTimeout(()=>{ if(state.procOpen===name) openProc(name, attempt+1); }, 3000);
+      return;
+    }
+    $("#pm-body").innerHTML=`<div class="empty">Помилка: ${esc(e.message)}.
+      Перевір, чи запущений монітор.</div>`; return; }
   if(d.error){ $("#pm-body").innerHTML=`<div class="empty">${esc(d.error)}</div>`; return; }
   state.procData=d;
   renderProc(d);

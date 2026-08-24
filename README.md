@@ -203,3 +203,8 @@ installer into `updates\` yourself (build.bat does this for you).
 - **Port already in use** — change `dashboard_port` in `config.json`.
 - **Lots of system processes in the list** — that's normal; sort by CPU
   time, use search, and "✓ Trust" the programs you know.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Bundled [Chart.js](https://www.chartjs.org)
+is also MIT-licensed.
