@@ -55,7 +55,7 @@ sys.path.insert(0, BASE)
 import psutil  # noqa: E402
 import suspicion  # noqa: E402
 
-VERSION = "1.2.1"
+VERSION = "1.3.0"
 IS_WIN = sys.platform == "win32"
 GITHUB_REPO = "Amriel/PCmonitor"   # звідки апка бере нові релізи
 
@@ -104,6 +104,10 @@ DEFAULT_CONFIG = {
     # ввімкнено auto_install_updates.
     "github_updates": True,
     "auto_install_updates": False,
+    # Глибока картка процесу: ролі процесів браузерів/Electron (вкладка, GPU,
+    # мережа, розширення) + живий CPU по кожному PID. Це РАЗОВИЙ збір у момент
+    # відкриття картки (~0.6 с заміру), фонового навантаження не додає.
+    "card_deep": True,
     # Виконання команд із вікна монітора. ВИМКНЕНО за замовчуванням свідомо:
     # це найпотужніша можливість застосунку, і вмикати її має людина, а не
     # оновлення. Команди виконуються від звичайного користувача навіть тоді,
@@ -2357,6 +2361,11 @@ def process_card(ctx, name, date=None):
                 pname_cache[pid] = ""
         return pname_cache[pid]
 
+    import procctl as _pc
+    # Глибокий збір (ролі + CPU по PID) можна вимкнути в налаштуваннях —
+    # тоді картка відкривається швидше і не читає командних рядків узагалі.
+    deep = bool(ctx.cfg.get("card_deep", True))
+    pairs = []                            # (Process, row) — для другого проходу CPU
     for p in targets[:MAX_PROCS]:
         if time.time() > deadline:
             partial = True
@@ -2379,6 +2388,14 @@ def process_card(ctx, name, date=None):
                         row[key] = str(fn() or "")
                     except Exception:
                         row[key] = ""
+                # Роль процесу браузера/Electron (вкладка/GPU/мережа/розширення)
+                # — читаємо командний рядок ЖИВО; у базу він не потрапляє
+                # (log_cmdline керує саме збереженням).
+                if deep:
+                    try:
+                        row["role"] = _pc.browser_role(lname, p.cmdline())
+                    except Exception:
+                        row["role"] = ""
                 if ctx.cfg.get("log_cmdline"):
                     try:
                         cl = p.cmdline()
@@ -2391,17 +2408,43 @@ def process_card(ctx, name, date=None):
                     row["write_b"] = io.write_bytes
                 except Exception:
                     pass
+                if deep:
+                    p.cpu_percent(None)  # закласти базу для заміру CPU нижче
             row["parent"] = _pname(row["ppid"])
             row["conns"] = (conns_by_pid.get(row["pid"], 0)
                             if conns_by_pid is not None else None)
             procs.append(row)
+            pairs.append((p, row))
             total["rss"] += rss
             total["threads"] += row["threads"]
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
         except Exception:
             continue
-    procs.sort(key=lambda r: -r["rss"])
+
+    # --- живий CPU по КОЖНОМУ процесу (замір ~0.6 с) ----------------------
+    # Для браузерів це і є відповідь на «звідки навантаження»: одразу видно,
+    # їдять його вкладки-рендерери, GPU-процес чи якесь розширення.
+    if deep and pairs and time.time() + 0.7 < deadline:
+        time.sleep(0.6)
+        for p, row in pairs:
+            try:
+                row["cores"] = round(p.cpu_percent(None) / 100.0, 2)
+            except Exception:
+                pass
+
+    # зведення за ролями — рядок «вкладки ×12 · 1.4 ядра» над таблицею
+    roles = {}
+    if deep and any(r.get("role") for r in procs):
+        for r in procs:
+            role = r.get("role") or "інше"
+            g = roles.setdefault(role, {"role": role, "n": 0, "cores": 0.0, "rss": 0})
+            g["n"] += 1
+            g["cores"] += r.get("cores") or 0
+            g["rss"] += r.get("rss") or 0
+        for g in roles.values():
+            g["cores"] = round(g["cores"], 2)
+    procs.sort(key=lambda r: (-(r.get("cores") or 0), -r["rss"]))
     scan_ms = round((time.time() - t_conn) * 1000)
 
     # --- живий зріз від збирача (CPU/диск/мережа/GPU за інтервал) --------
@@ -2439,6 +2482,7 @@ def process_card(ctx, name, date=None):
     return {
         "name": lname, "date": date, "exe": exe, "ncpu": ncpu,
         "processes": procs, "nproc": len(procs), "total": total,
+        "roles": sorted(roles.values(), key=lambda g: -g["cores"]) if roles else None,
         "live": live, "summary": summary, "exe_info": info,
         "minutes": minutes, "net_minutes": netmin,
         "connections": conns, "domains": domains,

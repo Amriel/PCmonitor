@@ -363,6 +363,73 @@ def open_folder(pid=None, path=""):
 # Те саме з node, java, electron, cmd, powershell. Тому для таких процесів
 # справжня назва — це те, ЩО вони виконують, і дістати її можна лише з
 # командного рядка.
+# Браузери на Chromium (і CEF-обгортки): роль кожного процесу видно з його
+# командного рядка (--type=...). Це максимум, що Windows чесно віддає ззовні:
+# ЯКА САМЕ вкладка в якому рендерері — знає лише сам браузер (Shift+Esc у
+# Chrome). Відкривати його debug-порт заради назв ми свідомо не будемо —
+# це повний віддалений контроль над браузером.
+CHROMIUM_FAMILY = {
+    "chrome.exe", "msedge.exe", "opera.exe", "opera_gx.exe", "brave.exe",
+    "vivaldi.exe", "chromium.exe", "msedgewebview2.exe",
+    "steamwebhelper.exe", "cefsharp.browsersubprocess.exe",
+}
+
+
+FIREFOX_FAMILY = {"firefox.exe", "librewolf.exe", "waterfox.exe", "floorp.exe",
+                  "zen.exe", "tor.exe"}
+_FF_KINDS = {"tab": "вкладка (рендерер)", "gpu": "GPU (графіка й відео)",
+             "socket": "мережа", "rdd": "відео-декодер",
+             "utility": "службовий", "forkserver": "службовий"}
+
+
+def browser_role(name, cmdline):
+    """
+    Роль процесу браузера («вкладка», «GPU», «мережа»…) або "".
+
+    Визначаємо не за списком назв, а за самим командним рядком: усі браузери
+    на Chromium (і всі Electron-застосунки — Discord, Spotify тощо) передають
+    дочірнім процесам --type=..., Firefox-и — -contentproc з типом останнім
+    аргументом. Тож працює для будь-якого браузера, включно з тими, про які
+    ми не чули.
+    """
+    nm = (name or "").lower()
+    cl = cmdline or []
+    if nm in FIREFOX_FAMILY:
+        if not any(a == "-contentproc" for a in cl):
+            return "браузер (головний)"
+        return _FF_KINDS.get((cl[-1] if cl else "").lower(), "вкладки (контент)")
+    has_type = any(a.startswith("--type=") for a in cl)
+    if nm not in CHROMIUM_FAMILY and not has_type:
+        return ""
+    typ, sub, ext = "", "", False
+    for a in (cmdline or []):
+        if a.startswith("--type="):
+            typ = a[7:]
+        elif a.startswith("--utility-sub-type="):
+            sub = a[19:].lower()
+        elif a == "--extension-process":
+            ext = True
+    if not typ:
+        return "браузер (головний)"
+    if typ == "renderer":
+        return "розширення" if ext else "вкладка (рендерер)"
+    if typ == "gpu-process":
+        return "GPU (графіка й відео)"
+    if typ == "utility":
+        if "network" in sub:
+            return "мережа"
+        if "audio" in sub:
+            return "аудіо"
+        if "storage" in sub:
+            return "сховище"
+        if "video_capture" in sub:
+            return "камера"
+        return "службовий"
+    if typ == "crashpad-handler":
+        return "звіти про збої"
+    return "службовий"
+
+
 INTERPRETERS = {
     "python.exe": "py", "pythonw.exe": "py", "python3.exe": "py", "python": "py",
     "python3": "py", "pythonw": "py",

@@ -354,20 +354,35 @@ def check_telemetry():
 def check_startup():
     if not IS_WIN:
         return _res("skip", "Автозапуск", "лише для Windows")
-    data = _ps("Get-CimInstance Win32_StartupCommand -ErrorAction SilentlyContinue | "
-               "Select-Object Name,Command,Location,User | ConvertTo-Json -Compress", timeout=45)
+    # Те саме джерело, що й вкладка «Автозапуск»: записи з реальними id і
+    # станом увімкнено/вимкнено. Завдяки цьому кожен рядок у результатах
+    # перевірки має кнопку «Вимкнути» — тим самим штатним механізмом
+    # (StartupApproved), яким користується Диспетчер задач. Нічого не
+    # видаляється, увімкнути назад можна будь-коли.
+    try:
+        import startup_win
+        data = startup_win.list_startup()
+    except Exception as e:
+        return _res("skip", "Автозапуск", f"не вдалося прочитати: {e}")
     items = []
-    for d in (data or []):
-        cmd = (d.get("Command") or "")
-        items.append({"status": "info", "name": d.get("Name") or "?",
-                      "text": (cmd[:110] + ("…" if len(cmd) > 110 else ""))})
-    n = len(items)
-    st = "ok" if n <= 8 else ("warn" if n <= 16 else "bad")
+    enabled_n = 0
+    for it in (data.get("items") or []):
+        en = bool(it.get("enabled", True))
+        if en:
+            enabled_n += 1
+        cmd = it.get("command") or ""
+        items.append({"status": "info" if en else "skip",
+                      "name": it.get("name") or "?",
+                      "text": (cmd[:110] + ("…" if len(cmd) > 110 else "")),
+                      "sid": it.get("id"), "enabled": en,
+                      "can": bool(it.get("can_toggle", True))})
+    st = "ok" if enabled_n <= 8 else ("warn" if enabled_n <= 16 else "bad")
     fix = None
     if st != "ok":
-        fix = (f"У автозапуску {n} програм — це помітно сповільнює вмикання "
-               "комп'ютера. Прибрати зайве: «Диспетчер задач → Автозавантаження».")
-    return _res(st, f"Автозапуск ({n})", items=items[:25], fix=fix, weight=1)
+        fix = (f"Увімкнених у автозапуску {enabled_n} — це помітно сповільнює "
+               "вмикання комп'ютера. Зайве можна вимкнути прямо тут — кнопкою "
+               "біля запису. Це не видалення: увімкнути назад можна будь-коли.")
+    return _res(st, f"Автозапуск ({enabled_n})", items=items[:31], fix=fix, weight=1)
 
 
 # =====================================================================

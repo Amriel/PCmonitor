@@ -1706,6 +1706,7 @@ async function openProc(name, attempt=0){
   if(!attempt){
     $("#pm-path").textContent="";
     $("#pm-body").innerHTML='<div class="empty">Збираю дані…</div>';
+    translateNode($("#pm-body"));
   }
   let d;
   try{
@@ -1722,6 +1723,7 @@ async function openProc(name, attempt=0){
     if(e.name==="AbortError"){
       $("#pm-body").innerHTML='<div class="empty">Збір даних триває надто довго. '
         +'Спробуй ще раз — або надішли мені загальний звіт (⚙ Налаштування).</div>';
+      translateNode($("#pm-body"));
       return;
     }
     // «Failed to fetch» — сервер недоступний. Найчастіше це просто збирач
@@ -1730,11 +1732,13 @@ async function openProc(name, attempt=0){
     if(attempt<10 && state.procOpen===name){
       $("#pm-body").innerHTML=`<div class="empty">Збирач не відповідає — схоже,
         перезапускається. Спробую ще раз… (${attempt+1}/10)</div>`;
+      translateNode($("#pm-body"));
       setTimeout(()=>{ if(state.procOpen===name) openProc(name, attempt+1); }, 3000);
       return;
     }
     $("#pm-body").innerHTML=`<div class="empty">Помилка: ${esc(e.message)}.
-      Перевір, чи запущений монітор.</div>`; return; }
+      Перевір, чи запущений монітор.</div>`;
+    translateNode($("#pm-body")); return; }
   if(d.error){ $("#pm-body").innerHTML=`<div class="empty">${esc(d.error)}</div>`; return; }
   state.procData=d;
   renderProc(d);
@@ -1794,9 +1798,17 @@ function renderProc(d){
     kv("Дата файлу", inf.mtime?new Date(inf.mtime*1000).toLocaleString("uk-UA"):""),
   ].join("")||'<div class="muted" style="font-size:12.5px">Немає даних про файл</div>';
 
+  // роль (вкладка/GPU/мережа…) і живий CPU по PID — коли ввімкнено
+  // «глибоку картку»; для браузерів це відповідь на «звідки навантаження»
+  const hasRole=(d.processes||[]).some(p=>p.role);
+  const hasCpu=(d.processes||[]).some(p=>p.cores!=null);
+  const NCOL=6+(hasRole?1:0)+(hasCpu?1:0)+2;
   const procs=(d.processes||[]).map(p=>`<tr class="prow" data-pid="${p.pid}"
       title="Клацни, щоб побачити, що саме виконує цей процес">
       <td style="text-align:left">${p.pid}</td>
+      ${hasCpu?`<td${(p.cores||0)>=0.5?' style="color:var(--org)"':""}>${
+        p.cores!=null?p.cores.toFixed(2):"—"}</td>`:""}
+      ${hasRole?`<td class="muted" style="text-align:left">${esc(p.role||"")}</td>`:""}
       <td>${fb(p.rss)}</td><td>${p.threads}</td>
       <td class="muted">${esc(p.status||"")}</td>
       <td class="muted">${p.started?ft(p.started):"—"}</td>
@@ -1806,7 +1818,10 @@ function renderProc(d){
         title="Завершити цей процес">✕</button></td>
     </tr>
     <tr class="pdet" id="pdet-${p.pid}" style="display:none">
-      <td colspan="8" style="padding:0"></td></tr>`).join("");
+      <td colspan="${NCOL}" style="padding:0"></td></tr>`).join("");
+  const roleChips=(d.roles||[]).map(g=>`<span class="chip"><b>${esc(g.role)}</b>
+      <span>×${g.n}</span>${g.cores?` · <span>${g.cores.toFixed(2)} ядра</span>`:""}
+      · ${fb(g.rss)}</span>`).join("");
 
   const doms=(d.domains||[]).map(x=>`<span class="chip"><b>${esc(x.domain)}</b> ×${x.times}</span>`).join("");
   const cns=(d.connections||[]).slice(0,60).map(c=>`<span class="chip">${esc(c.raddr)}:${c.rport}</span>`).join("");
@@ -1834,8 +1849,12 @@ function renderProc(d){
     <div class="pgrid">
       <div class="psec"><h3>Про файл</h3>${ident}</div>
       <div class="psec"><h3>Процеси (${d.nproc})</h3>
+        ${roleChips?`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">${roleChips}</div>`:""}
         ${procs?`<div class="minitable" style="max-height:460px"><table>
-          <thead><tr><th style="text-align:left">PID</th><th>Пам'ять</th><th>Потоків</th>
+          <thead><tr><th style="text-align:left">PID</th>
+          ${hasCpu?'<th title="Скільки ядер займає цей процес просто зараз">CPU</th>':""}
+          ${hasRole?'<th style="text-align:left">Роль</th>':""}
+          <th>Пам'ять</th><th>Потоків</th>
           <th>Стан</th><th>Старт</th><th style="text-align:left">Батько</th><th>З'єдн.</th><th></th>
           </tr></thead><tbody>${procs}</tbody></table></div>`
           :'<div class="muted" style="font-size:12.5px">Зараз не запущена</div>'}</div>
@@ -1865,6 +1884,7 @@ function renderProc(d){
     </div>`;
 
   // розкриття рядка процесу — саме тут видно, ЩО він виконує
+  translateNode($("#pm-body"));   // картка пишеться напряму, повз dom()
   $("#pm-body").querySelectorAll("tr.prow").forEach(tr=>{
     tr.onclick=()=>toggleProcDetail(+tr.dataset.pid, d.name);
   });
@@ -2204,13 +2224,44 @@ function renderHealth(d){
         <span class="muted" style="font-size:11.5px">${r.took!=null?r.took+" с":""}</span>
       </div>
       ${(r.items&&r.items.length)||r.fix?`<div class="hbody">
-        ${(r.items||[]).map(it=>`<div class="hitem s-${it.status||"info"}">
-            <span class="hdot"></span><div><b>${esc(it.name)}</b>
-            <span class="muted"> — ${esc(it.text||"")}</span></div></div>`).join("")}
+        ${(r.items||[]).map(it=>`<div class="hitem s-${it.status||"info"}"${it.enabled===false?' style="opacity:.55"':""}>
+            <span class="hdot"></span><div style="flex:1"><b>${esc(it.name)}</b>
+            <span class="muted"> — ${esc(it.text||"")}</span></div>
+            ${it.sid?(it.can===false
+              ?`<span class="muted" style="font-size:11px;white-space:nowrap"
+                  title="Запис «для всіх» — потрібні права адміністратора">потрібен адмін</span>`
+              :`<button class="btn small hsw" data-sid="${esc(it.sid)}"
+                  data-en="${it.enabled===false?"0":"1"}"
+                  title="Той самий штатний перемикач, що в Диспетчері задач. Нічого не видаляється — можна увімкнути назад будь-коли."
+                  >${it.enabled===false?"Увімкнути":"Вимкнути"}</button>`):""}</div>`).join("")}
         ${r.fix?`<div class="hfix"><b>Що робити:</b>\n${esc(r.fix)}</div>`:""}
       </div>`:""}
     </div>`).join("");
 }
+// Вимикання автозапуску прямо з результатів перевірки. Обробник — делегатом
+// на контейнері: рядки перемальовуються, а слухач живе один раз.
+async function hStartupToggle(btn){
+  const sid=btn.dataset.sid, enable=btn.dataset.en!=="1";
+  btn.disabled=true;
+  let r;
+  try{
+    r=await api("/api/startup",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({what:"app",id:sid,enable})});
+  }catch(e){ btn.disabled=false; toast("Помилка: "+esc(e.message)); return; }
+  btn.disabled=false;
+  if(!r.ok){ toast("Не вдалося: "+esc(r.error||"")); return; }
+  btn.dataset.en=enable?"1":"0";
+  btn.textContent=t(enable?"Вимкнути":"Увімкнути");
+  const row=btn.closest(".hitem"); if(row) row.style.opacity=enable?"":"0.55";
+  state.startupData=null;            // вкладка «Автозапуск» перечитає свіже
+  toast(enable?"✓ Увімкнено назад":"✓ Вимкнено. Програма не стартуватиме з Windows — "
+        +"увімкнути назад можна тут або на вкладці «Автозапуск».");
+}
+document.addEventListener("click",e=>{
+  const b=e.target.closest&&e.target.closest(".hsw");
+  if(b) hStartupToggle(b);
+});
+
 async function startHealth(mode){
   try{
     const r=await api("/api/health",{method:"POST",headers:{"Content-Type":"application/json"},
@@ -2541,24 +2592,33 @@ async function loadDpc(){
   const r=d.result;
   if(!r){ if(!run) box.innerHTML=""; return; }
   const drv=r.drivers||[];
-  const maxv=Math.max(1,...drv.map(x=>x.usec||x.total||0));
+  // Запасний спосіб розбору (tracerpt) дає лише КІЛЬКІСТЬ викликів — без
+  // тривалостей. Дві колонки суцільних прочерків виглядали як зламані дані;
+  // чесніше сховати їх і сказати чому.
+  const hasTime=drv.some(x=>x.usec||x.max_us);
+  const maxv=Math.max(1,...drv.map(x=>hasTime?(x.usec||x.total||0)
+                                             :((x.dpc_count||0)+(x.isr_count||0))));
   box.innerHTML=`
     <div class="verdict ${drv.length?"warn":"good"}">
       <b>Розклад по драйверах</b>
       За ${r.seconds} с зібрано трасу (${r.etl_mb} МБ), впізнано ${r.modules} драйверів.
-      Спосіб розбору: ${esc(r.source)}.
+      Спосіб розбору: ${esc(r.source)}.${hasTime?"":`
+      <span class="muted">Цей спосіб рахує лише кількість викликів — тривалості
+      вміє лише повний профіль xperf, який ця система не прийняла. Смужки
+      показують частку від сумарної кількості.</span>`}
     </div>
     <table style="font-size:12.5px"><thead><tr>
       <th style="text-align:left">Драйвер</th><th>DPC</th><th>ISR</th>
-      <th>Разом часу</th><th>Найдовший</th><th style="width:130px"></th>
+      ${hasTime?`<th>Разом часу</th><th>Найдовший</th>`:""}<th style="width:130px"></th>
     </tr></thead><tbody>
       ${drv.slice(0,20).map(x=>{
-        const v=x.usec||x.total||0, pc=v/maxv*100;
+        const v=hasTime?(x.usec||x.total||0):((x.dpc_count||0)+(x.isr_count||0));
+        const pc=v/maxv*100;
         return `<tr>
           <td style="text-align:left"><b>${esc(x.driver)}</b></td>
           <td>${x.dpc_count||"—"}</td><td>${x.isr_count||"—"}</td>
-          <td>${x.usec?(x.usec>=1000?(x.usec/1000).toFixed(1)+" мс":x.usec.toFixed(0)+" мкс"):"—"}</td>
-          <td>${x.max_us?x.max_us.toFixed(0)+" мкс":"—"}</td>
+          ${hasTime?`<td>${x.usec?(x.usec>=1000?(x.usec/1000).toFixed(1)+" мс":x.usec.toFixed(0)+" мкс"):"—"}</td>
+          <td>${x.max_us?x.max_us.toFixed(0)+" мкс":"—"}</td>`:""}
           <td><div class="cpubar-wrap" style="max-width:none"><div class="cpubar${pc>60?" hot":""}"
             style="width:${pc}%"></div></div></td>
         </tr>`}).join("")}
@@ -2661,6 +2721,12 @@ async function loadSettings(){
         <span>Менше значення — детальніша картина, але більше навантаження.
         Зараз одне опитування триває ${d.scan_ms} мс.</span></div>
         <div class="ctl"><input type="number" id="i-sample" min="1" max="60" value="${c.sample_interval}"> <span class="muted">с</span></div></div>
+      <div class="cfg-row"><div class="lbl"><b>Глибока картка процесу</b>
+        <span>У картці програми: роль кожного процесу браузера чи
+        Electron-апки (вкладка, GPU, мережа, розширення) і живий CPU по
+        кожному PID. Це разовий збір у момент відкриття картки (~1 с) —
+        фонового навантаження не додає.</span></div>
+        <div class="ctl">${swHtml("sw-deep",c.card_deep!==false)}</div></div>
       <div class="cfg-row"><div class="lbl"><b>Точна мережа по програмах (ETW)</b>
         <span>Скільки байтів надіслала кожна програма і які домени запитувала.
         Потребує прав адміністратора. Стан: ${esc(d.etw)}</span></div>
@@ -2812,6 +2878,7 @@ async function loadSettings(){
   t("sw-adm","run_as_admin");
   t("sw-ghupd","github_updates"); t("sw-ghauto","auto_install_updates");
   t("sw-etw","etw_enabled"); t("sw-gpu","gpu_enabled");
+  t("sw-deep","card_deep");
   t("sw-cmd","log_cmdline"); t("sw-sig","sig_check"); t("sw-hash","hash_new_exes");
   // вмикання командного рядка одразу перемальовує розділ, щоб з'явилось поле
   const swc=$("#sw-cmds");
