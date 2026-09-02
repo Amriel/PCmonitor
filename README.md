@@ -157,6 +157,19 @@ open.
   same official mechanism Task Manager uses.
 - **Stream Deck** — a native plugin: metrics with mini-charts right on the
   keys (Settings → "Install plugin").
+- **🔔 Notifications** (1.4.0) — standard Windows toasts from the tray while
+  the window is closed: a new program talking to the network, a suspicion
+  threshold crossed, a *busy loop* (one core burned for 30+ minutes by a
+  loop without a sleep), memory pressure with the culprit named, a disk
+  that is almost full or will fill up within days at the current trend,
+  GPU/drive temperature, a new startup entry. Quiet hours, per-kind
+  switches, everything also lands in the Events feed. No extra polling —
+  the detectors run on data the monitor already collects.
+- **📅 Week / month view** with a digest: core-hours vs. the previous
+  period, biggest growers, new and vanished programs; CSV export.
+- **🔍 Who is hammering WMI** — a one-off 30-second ETW trace naming the
+  clients behind `WmiPrvSE.exe` CPU usage (admin required).
+- **Live tray icon** (CPU/RAM bars) and a global hotkey to show the window.
 
 ---
 
@@ -168,6 +181,8 @@ program that does not need Python:
 1. Install [Inno Setup 6](https://jrsoftware.org/isinfo.php).
 2. Run **`build.bat`** — it installs PyInstaller, builds
    `dist\PCMonitor\PCMonitor.exe` and `dist\PCMonitor-Setup-X.Y.Z.exe`.
+   Releases are built the same way by GitHub Actions
+   (`.github/workflows/release.yml`) whenever a `vX.Y.Z` tag is pushed.
 3. The installer is **per-user** (no admin required), installs to
    `%LocalAppData%\Programs\PC Monitor`, and **never touches** the
    database on update or uninstall.
@@ -197,6 +212,10 @@ installer into `updates\` yourself (build.bat does this for you).
 | `hash_new_exes` | SHA-256 new executables | true |
 | `log_cmdline` | log process command lines | false |
 | `suspicion.*` | heuristic thresholds | see file |
+| `retention_conn_days` | days of connection / process-launch history | 60 |
+| `notify.*` | notification switches, quiet hours, thresholds | see Settings |
+| `tray_live` | CPU/RAM bars on the tray icon | true |
+| `hotkey` | global hotkey to show the window | ctrl+shift+m |
 
 ## Troubleshooting
 

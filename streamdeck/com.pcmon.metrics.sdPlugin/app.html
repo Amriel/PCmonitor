@@ -24,6 +24,7 @@ let data = null, lastOk = 0;
 // Мова написів на клавішах: обирається в налаштуваннях клавіші (PI).
 // en-заголовок лежить поруч у полі te; чого нема — лишається українською.
 let LANG = "uk";
+let langPinned = false;   // true, коли мову задано в налаштуваннях клавіші
 const METRICS = {
   cpu:       { title: "Процесор",  te: "CPU",       unit: "%",   max: 100, color: "#4ade80" },
   core_max:  { title: "Пік ядра",  te: "Core peak", unit: "%",   max: 100, color: "#fbbf24" },
@@ -54,14 +55,14 @@ function connectElgatoStreamDeckSocket(inPort, inUUID, inRegisterEvent, inInfo) 
     const ctx = m.context;
     if (m.event === "willAppear") {
       keys.set(ctx, { settings: m.payload.settings || {}, series: [] });
-      if ((m.payload.settings || {}).lang) LANG = m.payload.settings.lang;
+      if ((m.payload.settings || {}).lang) { LANG = m.payload.settings.lang; langPinned = true; }
       draw(ctx);
     } else if (m.event === "willDisappear") {
       keys.delete(ctx);
     } else if (m.event === "didReceiveSettings") {
       const k = keys.get(ctx);
       if (k) { k.settings = m.payload.settings || {};
-        if (k.settings.lang) LANG = k.settings.lang;
+        if (k.settings.lang) { LANG = k.settings.lang; langPinned = true; }
         draw(ctx); }
     } else if (m.event === "keyDown") {
       // натиск нічого не змінює в системі — просто оновлюємо негайно
@@ -85,6 +86,8 @@ async function poll() {
     if (!r.ok) throw new Error(r.status);
     data = await r.json();
     lastOk = Date.now();
+    // мова клавіш іде за мовою апки, якщо для клавіші не задано свою
+    if (data && data.lang && !langPinned) LANG = data.lang;
   } catch (_) {
     data = null;                                  // монітор не відповідає
   }

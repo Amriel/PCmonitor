@@ -421,6 +421,21 @@ def check_updates():
 # =====================================================================
 #  ЖУРНАЛ ПОДІЙ
 # =====================================================================
+# Джерела помилок, які на здоров'я не впливають — відомий шум Windows.
+# Показуємо, але не рахуємо в оцінку і пояснюємо, чому.
+KNOWN_NOISE = {
+    "microsoft-windows-distributedcom":
+        "DCOM 10016 — застосунок без прав на COM-об'єкт. Microsoft офіційно "
+        "радить ігнорувати: на роботу не впливає.",
+    "volsnap": "Тіньові копії при сплячці/вимкненні — типово нешкідливо.",
+    "microsoft-windows-kernel-power":
+        "Kernel-Power 41 — відмітка про минулий раптовий рестарт, а не поточна проблема.",
+    "eventlog": "Служба журналу фіксує сам факт перезавантаження.",
+    "microsoft-windows-kernel-boot": "Записи про завантаження — інформаційні.",
+}
+IGNORE_SOURCES = set()      # заповнює monitor із config health_ignore_sources
+
+
 def check_events():
     if not IS_WIN:
         return _res("skip", "Журнал подій", "лише для Windows")
@@ -431,10 +446,20 @@ def check_events():
                "Select-Object -First 8 Name,Count | ConvertTo-Json -Compress", timeout=90)
     if data is None:
         return _res("info", "Помилки в журналі подій", "не вдалося прочитати", weight=1)
-    items = [{"status": "warn" if d.get("Count", 0) >= 20 else "info",
-              "name": d.get("Name") or "?",
-              "text": f"{d.get('Count')} помилок за тиждень"} for d in data]
-    total = sum(d.get("Count", 0) for d in data)
+    items, total = [], 0
+    for d in data:
+        nm = d.get("Name") or "?"
+        cnt = d.get("Count", 0)
+        noise = KNOWN_NOISE.get(nm.lower())
+        ignored = nm.lower() in IGNORE_SOURCES
+        if noise or ignored:
+            items.append({"status": "skip", "name": nm,
+                          "text": f"{cnt} за тиждень — {'ігноруєш' if ignored else 'шум: ' + noise}",
+                          "source": nm, "ignorable": True, "ignored": ignored})
+            continue
+        total += cnt
+        items.append({"status": "warn" if cnt >= 20 else "info", "name": nm,
+                      "text": f"{cnt} помилок за тиждень", "source": nm, "ignorable": True})
     st = "ok" if total == 0 else ("info" if total < 20 else ("warn" if total < 100 else "bad"))
     fix = None
     if st in ("warn", "bad"):
@@ -542,3 +567,49 @@ def score(results):
         num += p * w
         den += w
     return round(100 * num / den) if den else None
+
+
+# =====================================================================
+#  ПАДІННЯ ПРОГРАМ (Event 1000/1001/1002 у журналі «Програми»)
+# =====================================================================
+_crash_cache = {"ts": 0, "rows": []}
+
+
+def _all_crashes(days=7):
+    """Усі падіння за N днів, одним запитом і з кешем на 10 хв."""
+    import time as _t
+    now = _t.time()
+    if now - _crash_cache["ts"] < 600:
+        return _crash_cache["rows"]
+    if not IS_WIN:
+        return []
+    data = _ps("$t=(Get-Date).AddDays(-%d);"
+               "Get-WinEvent -FilterHashtable @{LogName='Application';Id=1000,1002;StartTime=$t} "
+               "-MaxEvents 300 -ErrorAction SilentlyContinue | "
+               "Select-Object @{n='ts';e={[int][double]::Parse((Get-Date $_.TimeCreated -UFormat %%s))}},"
+               "Id,@{n='msg';e={$_.Message.Substring(0,[Math]::Min(600,$_.Message.Length))}} | "
+               "ConvertTo-Json -Compress" % days, timeout=60)
+    rows = []
+    for d in (data or []):
+        msg = d.get("msg") or ""
+        # «Faulting application name: X.exe, version ..., ... Faulting module name: Y.dll»
+        # локалізовані Windows пишуть «Ім'я програми, що спричинила помилку:» —
+        # тому ловимо перший *.exe і перший *.dll/.sys після нього
+        import re as _re
+        m_app = _re.search(r"([\w\-. ]+\.exe)", msg, _re.I)
+        m_mod = _re.search(r"([\w\-. ]+\.(dll|sys|exe))[^\n]*?(?:0x[0-9a-f]+)", msg[m_app.end():] if m_app else msg, _re.I)
+        rows.append({"ts": d.get("ts"), "id": d.get("Id"),
+                     "app": (m_app.group(1).strip().lower() if m_app else ""),
+                     "module": (m_mod.group(1).strip() if m_mod else ""),
+                     "kind": "падіння" if d.get("Id") == 1000 else "зависання"})
+    _crash_cache["ts"] = now
+    _crash_cache["rows"] = rows
+    return rows
+
+
+def crashes_for(name, days=7):
+    """Падіння конкретної програми за N днів (для картки процесу)."""
+    nm = (name or "").lower()
+    if not nm:
+        return []
+    return [r for r in _all_crashes(days) if r["app"] == nm][:20]

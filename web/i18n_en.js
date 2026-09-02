@@ -42,3 +42,109 @@ Object.assign(window.I18N_EN,{
 "Цей спосіб рахує лише кількість викликів — тривалості вміє лише повний профіль xperf, який ця система не прийняла. Смужки показують частку від сумарної кількості.":"This method only counts calls — durations require the full xperf profile, which this system rejected. Bars show the share of the total count.",
 "Розклад по драйверах":"Breakdown by driver","Драйвер":"Driver","Разом часу":"Total time","Найдовший":"Longest",
 });
+
+// Відомі винуватці блокування буфера
+Object.assign(window.I18N_EN,{
+"Відома вада Windows 11: «Ножиці» іноді не відпускають буфер після скріншота з розпізнаванням тексту. Завершити процес безпечно — він сам запуститься знову на Win+Shift+S.":"Known Windows 11 issue: Snipping Tool sometimes fails to release the clipboard after a screenshot with text recognition. Ending the process is safe — it starts again on Win+Shift+S.",
+"Історія буфера в PowerToys інколи тримає його на собі. Якщо повторюється — вимкни модуль «Clipboard History» у PowerToys.":"PowerToys clipboard history sometimes holds the clipboard. If it repeats, turn off the Clipboard History module in PowerToys.",
+"Провідник тримає буфер під час копіювання файлів. Дочекайся кінця копіювання — завершувати explorer.exe не варто.":"File Explorer holds the clipboard while copying files. Wait for the copy to finish — do not end explorer.exe.",
+"TeamViewer передає буфер віддаленій стороні й тримає його на час передачі. Під час активного сеансу це нормально.":"TeamViewer forwards the clipboard to the remote side and holds it during transfer. This is normal during an active session.",
+"Віддалений робочий стіл / WSLg синхронізує буфер із віддаленою машиною. Закрий сеанс — і буфер звільниться.":"Remote Desktop / WSLg syncs the clipboard with the remote machine. Close the session and the clipboard is released.",
+"Вміст буфера при цьому може зникнути — програма іноді віддає дані «на вимогу».":"The clipboard contents may be lost — apps sometimes render the data on demand.",
+});
+
+// Ретенція з'єднань + евристики
+Object.assign(window.I18N_EN,{
+"З'єднання та запуски процесів":"Connections and process launches",
+"Найбільші таблиці: браузер дає тисячі адрес і ~2000 запусків на день. Скорочення цього строку — головний важіль розміру бази. Раз на місяць база сама стискається.":"The largest tables: a browser produces thousands of addresses and ~2000 launches a day. Shortening this is the main lever for database size. The database compacts itself monthly.",
+"Монітор перезапускався — оновлюю сторінку…":"The monitor restarted — reloading the page…",
+"Інсталятор запущено з Temp — звично для встановлення програм":"Installer running from Temp — normal during software installation",
+"Нова версія відомої програми (шлях містить номер версії)":"New version of a known program (path contains a version number)",
+});
+window.I18N_RX.push(["^\\+(\\d+) · Інсталятор запущено з Temp — звично для встановлення програм$","+$1 · Installer running from Temp — normal during software installation"],
+ ["^\\+(\\d+) · Нова версія відомої програми \\(шлях містить номер версії\\)$","+$1 · New version of a known program (path contains a version number)"]);
+
+// ── 1.4.0: період/підсумок, CSV, довіра за видавцем, порожній цикл ──
+Object.assign(window.I18N_EN,{
+"День":"Day","Тиждень":"Week","Місяць":"Month",
+"За який проміжок дивитись. Тиждень і місяць закінчуються обраним днем.":"Which period to view. Week and month end on the selected day.",
+"Таблиця програм у CSV для Excel — у папку exports":"The apps table as CSV for Excel — saved to the exports folder",
+"Підсумок тижня":"Weekly digest","Підсумок місяця":"Monthly digest",
+"Ядро-години":"Core-hours","Нових програм":"New programs","exe, побачені вперше":"exes seen for the first time",
+"Зникли":"Gone","були активні, тепер ні":"were active, now silent","Мережа":"Network",
+"Найбільше зросли":"Biggest growth","Тепер":"Now","Було":"Before","Різниця":"Delta",
+"Нові програми":"New programs","Більше не працюють":"No longer running",
+"ПОРОЖНІЙ ЦИКЛ":"BUSY LOOP",
+"Порожній цикл: рівно одне ядро годинами при малій пам'яті й без диска — схоже на цикл без затримки. Коштує ~24 ядро-години на добу.":"Busy loop: exactly one core for hours with little memory and no disk — looks like a loop without a sleep. Costs ~24 core-hours a day.",
+"✓ видавець":"✓ publisher","Довірена за видавцем підпису":"Trusted by signature publisher",
+"✓ довіряти видавцю":"✓ trust publisher",
+"Довіряти всім програмам із дійсним підписом цього видавця — після оновлень не доведеться тиснути «Довіряю» знову":"Trust every program with a valid signature from this publisher — no need to press “Trust” again after updates",
+"видавця не вказано":"publisher not specified",
+"Сповіщення":"Notifications","Сповіщення з трея":"Tray notifications",
+"Монітор сам попереджає про важливе — стандартним сповіщенням Windows, поки вікно закрите. Усе показане лишається у стрічці «Події».":"The monitor warns you about what matters — via a standard Windows notification while the window is closed. Everything shown also stays in the Events feed.",
+"Тест":"Test",
+"Нова програма вперше в мережі":"New program on the network","exe з'явився менш ніж добу тому і вже щось надсилає":"the exe appeared less than a day ago and is already sending",
+"Поріг підозрілості":"Suspicion threshold","програма набрала бали вище порога":"a program scored above the threshold",
+"Порожній цикл":"Busy loop","рівно одне ядро 30+ хвилин при малій пам'яті — busy-wait":"exactly one core for 30+ minutes with little memory — busy-wait",
+"Оперативна пам'ять":"Memory","зайнято понад поріг три заміри поспіль, з назвою винуватця":"above the threshold three samples in a row, naming the culprit",
+"Диски":"Disks","диск майже повний або за трендом заповниться за кілька днів":"a disk is almost full or will fill up within days at the current trend",
+"Температура":"Temperature","відеокарта чи накопичувач вище порога":"GPU or drive above the threshold",
+"з'явився новий запис, якого вчора не було":"a new entry that was not there yesterday",
+"Стеження":"Watch","запустилась програма зі списку «Стежити»":"a program from the Watch list started",
+"Тихі години":"Quiet hours","У цей проміжок нічого не спливає — лише пишеться в «Події»":"Nothing pops up in this window — it is only written to Events",
+"з":"from","до":"to","год":"h",
+"Пороги":"Thresholds","Пам'ять, % · GPU, °C · диски, °C · диск заповниться за N днів":"Memory, % · GPU, °C · drives, °C · disk fills up in N days",
+"Живий значок у треї":"Live tray icon","Стовпчики CPU і RAM на значку замість логотипа, оновлення раз на 5 с":"CPU and RAM bars on the icon instead of the logo, refreshed every 5 s",
+"Гаряча клавіша вікна":"Window hotkey","Показати вікно з будь-якого місця.":"Show the window from anywhere.",
+"Зараз активна":"Active now","Застосується після перезапуску":"Applies after restart",
+"✓ Сповіщення надіслано — подивись у кут екрана":"✓ Notification sent — check the corner of the screen",
+"трей недоступний":"tray unavailable",
+"Ігнорувати":"Ignore","Рахувати знову":"Count again","Не рахувати це джерело в оцінці здоров'я":"Do not count this source in the health score",
+"Хто смикає WMI":"Who is hammering WMI",
+"WmiPrvSE їсть процесор? Він лише виконує чужі запити. 30 секунд трасування — і клієнти названі поіменно.":"WmiPrvSE eating CPU? It only runs other programs' queries. 30 seconds of tracing names every client.",
+"не трасувалось":"not traced yet","секунд":"seconds","▶ Трасувати":"▶ Trace","Скасувати":"Cancel",
+"WmiPrvSE.exe сам нічого не робить — він виконує WMI-запити інших програм (MSI Center, ASUS-агенти, антивірус, і наш монітор теж). Провайдер ETW":"WmiPrvSE.exe does nothing on its own — it executes WMI queries of other programs (MSI Center, ASUS agents, antivirus, and this monitor too). The ETW provider",
+"записує клієнта кожного запиту. Разово, за кліком, без драйверів; потрібні права адміністратора.":"records the client of every query. One-off, on click, no drivers; administrator rights required.",
+"збережений результат":"saved result","Програма":"Program","Запитів":"Queries","За хвилину":"Per minute","Що питає":"What it asks",
+"За цей час жодного WMI-запиту не було.":"No WMI queries during this time.","Що це означає:":"What it means:",
+"лише для Windows":"Windows only","потрібні права адміністратора — трасування ETW доступне лише їм":"administrator rights required — ETW tracing is only available to them",
+"скасовано":"cancelled","Старт сесії":"Starting session","Зупинка сесії":"Stopping session","Розбір траси":"Parsing trace","Готово":"Done",
+"Збої":"Crashes","Аварійні завершення":"Crashes","Завершився з помилкою":"Exited with error",
+"Довіряти всім програмам із дійсним підписом":"Trust every program with a valid signature from",
+});
+window.I18N_RX.push(
+ ["^Клієнти WMI за (\\d+) с$","WMI clients over $1 s"],
+ ["^Подій: (\\d+), клієнтів: (\\d+)","Events: $1, clients: $2"],
+ ["^попередній період: ([\\d.]+) \\((.+)\\)$","previous period: $1 ($2)"],
+ ["^(.+) — (.+) · порівняно з (.+) — (.+)$","$1 — $2 · compared with $3 — $4"],
+ ["^було (.+)$","was $1"],
+ ["^✓ CSV збережено: (.+) \\((\\d+) рядків\\)$","✓ CSV saved: $1 ($2 rows)"],
+ ["^✓ Видавець «(.+)» тепер довірений$","✓ Publisher “$1” is now trusted"],
+ ["^Найактивніший клієнт WMI — (.+) \\(([\\d.]+) запитів/хв\\)\\. Якщо це фонова утиліта \\(MSI Center, ASUS, RGB-софт\\) — вимкни її автозапуск: WMI-запити не безкоштовні, кожен крутить WmiPrvSE\\.$",
+  "The most active WMI client is $1 ($2 queries/min). If it is a background utility (MSI Center, ASUS, RGB software), disable its autostart: WMI queries are not free — each one spins WmiPrvSE."],
+ ["^Серед топ-клієнтів — сам монітор.*$","The monitor itself is among the top clients: drive sensors and health checks go through WMI. These are one-off queries, not a constant stream."],
+ ["^Не працює: (.+)$","Not working: $1"],
+ ["^Останні: (.+)$","Recent: $1"],
+ ["^Порожній цикл: (.+)$","Busy loop: $1"],
+ ["^(.+) — уже завершився$","$1 — already exited"],
+ ["^\\(pid (\\d+)\\)","(pid $1)"],
+ ["^Найбільше зросли$","Biggest growth"]
+);
+Object.assign(window.I18N_EN,{
+"З журналу Windows «Програми» (Event 1000/1002)":"From the Windows Application log (Event 1000/1002)",
+"падіння":"crash","зависання":"hang",
+"модуль падіння — графічний драйвер. Спробуй чистий перевстанов драйвера відеокарти (DDU) або відкат до попередньої версії.":"the faulting module is the graphics driver. Try a clean reinstall of the GPU driver (DDU) or roll back to the previous version.",
+});
+window.I18N_RX.push(["^Падіння за 7 днів \\((\\d+)\\)$","Crashes in 7 days ($1)"],["^(падіння|зависання) · модуль$","$1 · module"]);
+Object.assign(window.I18N_EN,{
+"Автозапуск":"Startup","🔍 Хто смикає WMI":"🔍 Who is hammering WMI",
+"Показати вікно з будь-якого місця. Застосується після перезапуску":"Show the window from anywhere. Applies after restart",
+"Показати вікно з будь-якого місця. Зараз активна":"Show the window from anywhere. Active now",
+"Перевірити рівень прав":"Check privilege level",
+"Запитає саму Windows, з якими правами насправді виконуються команди — щоб це не лишалось обіцянкою на слово.":"Asks Windows itself which rights commands actually run with — so it is not just a promise.",
+"Сам термінал — на вкладці «Зараз», поруч із живими показниками.":"The terminal itself is on the Now tab, next to the live readings.",
+});
+window.I18N_RX.push(["^Показати вікно з будь-якого місця\\. Не працює: (.+)$","Show the window from anywhere. Not working: $1"],
+ ["^зараз: (.+)$","now: $1"]);
+Object.assign(window.I18N_EN,{"Сам термінал — на вкладці":"The terminal itself is on the","«Зараз»":"“Now”","поруч із живими показниками.":"tab, next to the live readings."});
+Object.assign(window.I18N_EN,{"центр сповіщень не запущено":"notification center is not running","трей недоступний (запущено з --no-tray?)":"tray unavailable (started with --no-tray?)","сповіщення вимкнено в налаштуваннях":"notifications are disabled in settings"});

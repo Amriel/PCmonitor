@@ -75,6 +75,17 @@ PATH_RULES = [
     (re.compile(r"^[a-z]:\\[^\\]+\.exe$"), 15, "Виконуваний файл лежить у корені диска"),
 ]
 
+# Інсталятори ЖИВУТЬ у Temp — це їхня нормальна поведінка, а не маскування:
+# Inno Setup розпаковує себе в \Temp\is-XXXXX.tmp\, VS Code — CodeSetup-*.tmp,
+# браузерні завантаження запускаються зі scoped_dir*. Штрафувати їх повним
+# балом за Temp означало б лякати на кожне оновлення програм.
+INSTALLER_RE = re.compile(
+    r"(\\temp\\is-[a-z0-9]+\.tmp\\|setup[^\\]*\.(tmp|exe)$|install[^\\]*\.(tmp|exe)$"
+    r"|\\scoped_dir\d+_\d+\\|\\msi[a-z0-9]+\.tmp$|_installer\.exe$)")
+
+# Сегменти шляху з версією: \2.1.257-win32-x64\, \app-1.0.9253\, \151.0.4129.101\
+VERSION_SEG_RE = re.compile(r"\\[^\\]*\d+\.\d+(\.\d+)*[^\\]*\\")
+
 DOUBLE_EXT_RE = re.compile(
     r"\.(pdf|doc|docx|xls|xlsx|jpg|jpeg|png|gif|txt|mp3|mp4|avi|zip|rar)\.(exe|scr|com|bat|cmd|pif)$")
 
@@ -135,10 +146,16 @@ def evaluate(app, cfg=None):
         add(30, "Подвійне розширення в імені файлу — класичне маскування")
 
     # 3. Підозріле місце запуску
+    installer = bool(real_path and INSTALLER_RE.search(exe))
     if real_path:
         for rx, pts, why in PATH_RULES:
             if rx.search(exe):
-                add(pts, why)
+                if installer and "Temp" in why:
+                    # інсталятор у Temp — так і має бути; лишаємо легку
+                    # позначку, щоб він усе ж був видимий у списку
+                    add(6, "Інсталятор запущено з Temp — звично для встановлення програм")
+                else:
+                    add(pts, why)
                 break
 
     # 4. Стан цифрового підпису
@@ -182,9 +199,18 @@ def evaluate(app, cfg=None):
     ds = app.get("day_start_ts")
     baseline_days = app.get("baseline_days")
     min_baseline = float(cfg.get("new_exe_min_days", 3))
-    if (fs and ds and fs >= ds and not kernel
+    # Програма з версією в шляху (\2.1.257-win32-x64\, \app-1.0.9253\) після
+    # оновлення отримує НОВИЙ шлях — і виглядала «вперше побаченою», хоча
+    # це та сама програма. Якщо це ім'я вже бачили раніше під іншим шляхом
+    # (name_seen_before), або шлях версійний — новизна не рахується.
+    seen_before = bool(app.get("name_seen_before"))
+    versioned = bool(real_path and VERSION_SEG_RE.search(exe))
+    if (fs and ds and fs >= ds and not kernel and not seen_before
             and (baseline_days is None or baseline_days >= min_baseline)):
-        add(10, "Цей виконуваний файл сьогодні з'явився вперше за весь час спостереження")
+        if versioned:
+            add(4, "Нова версія відомої програми (шлях містить номер версії)")
+        else:
+            add(10, "Цей виконуваний файл сьогодні з'явився вперше за весь час спостереження")
 
     return score, reasons
 

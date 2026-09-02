@@ -1,0 +1,75 @@
+# PC Monitor — build the Windows exe + installer on GitHub's runner and
+# attach both (plus the .sha256 the app verifies against) to the release.
+#
+# Trigger: push a tag "vX.Y.Z" — it must match VERSION in monitor.py,
+# otherwise the job fails on purpose (the app compares versions by tag).
+#
+# Nothing here runs on the user's machine; the runner is a throwaway
+# Windows VM. No secrets besides the default GITHUB_TOKEN are needed.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Version from monitor.py must match the tag
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path monitor.py -Pattern '^VERSION\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          "VER=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append
+          if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -ne "v$ver") {
+            Write-Error "Tag ${{ github.ref_name }} != VERSION $ver in monitor.py"; exit 1
+          }
+          "Building PC Monitor $ver"
+
+      - name: Dependencies
+        run: |
+          python -m pip install --upgrade pip pyinstaller
+          python -m pip install -r requirements.txt
+
+      - name: PyInstaller (onedir)
+        run: python -m PyInstaller pcmon.spec --noconfirm
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y | Out-Null
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Qp /DAppVer=$env:VER installer.iss
+
+      - name: SHA-256
+        shell: pwsh
+        run: |
+          $f = "dist\PCMonitor-Setup-$env:VER.exe"
+          (Get-FileHash $f -Algorithm SHA256).Hash.ToLower() | Out-File -Encoding ascii -NoNewline "$f.sha256"
+          Get-Content "$f.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PCMonitor-${{ env.VER }}
+          path: |
+            dist/PCMonitor-Setup-${{ env.VER }}.exe
+            dist/PCMonitor-Setup-${{ env.VER }}.exe.sha256
+
+      - name: Attach to the GitHub release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: PC Monitor ${{ env.VER }}
+          generate_release_notes: true
+          files: |
+            dist/PCMonitor-Setup-${{ env.VER }}.exe
+            dist/PCMonitor-Setup-${{ env.VER }}.exe.sha256

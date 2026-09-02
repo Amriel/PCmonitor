@@ -55,7 +55,7 @@ sys.path.insert(0, BASE)
 import psutil  # noqa: E402
 import suspicion  # noqa: E402
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 IS_WIN = sys.platform == "win32"
 GITHUB_REPO = "Amriel/PCmonitor"   # звідки апка бере нові релізи
 
@@ -83,7 +83,8 @@ DEFAULT_CONFIG = {
     "flush_interval": 30,          # с, запис у базу
     "dashboard_port": 8787,        # лише 127.0.0.1
     "retention_minutes_days": 21,  # скільки днів тримати похвилинну деталізацію
-    "retention_days": 365,         # денні підсумки, події, з'єднання, DNS
+    "retention_days": 365,         # денні підсумки, події, DNS
+    "retention_conn_days": 60,     # з'єднання й запуски процесів — найбільші таблиці
     "watch_raw_days": 7,           # сирі 5-секундні семпли для «стеження»
     "log_cmdline": False,          # писати командний рядок процесів (вимкнено для приватності)
     "etw_enabled": True,           # точні байти мережі + DNS (потрібен адмін)
@@ -108,6 +109,15 @@ DEFAULT_CONFIG = {
     # мережа, розширення) + живий CPU по кожному PID. Це РАЗОВИЙ збір у момент
     # відкриття картки (~0.6 с заміру), фонового навантаження не додає.
     "card_deep": True,
+    # Сповіщення з трея (див. notify.py: перемикачі за типами, тихі години,
+    # пороги). Порожній словник = усе типове.
+    "notify": {},
+    # Живий значок у треї (стовпчики CPU/RAM замість логотипа)
+    "tray_live": True,
+    # Глобальна гаряча клавіша показати/сховати вікно; "" — вимкнено
+    "hotkey": "ctrl+shift+m",
+    # Джерела в журналі подій, які вважаємо шумом (перевірка здоров'я)
+    "health_ignore_sources": [],
     # Виконання команд із вікна монітора. ВИМКНЕНО за замовчуванням свідомо:
     # це найпотужніша можливість застосунку, і вмикати її має людина, а не
     # оновлення. Команди виконуються від звичайного користувача навіть тоді,
@@ -532,6 +542,8 @@ SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
 CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT);
+CREATE TABLE IF NOT EXISTS disk_free(day TEXT, drive TEXT, free_b INTEGER, total_b INTEGER, PRIMARY KEY(day,drive));
+CREATE TABLE IF NOT EXISTS trusted_signers(signer TEXT PRIMARY KEY, ts INTEGER);
 CREATE TABLE IF NOT EXISTS exe_info(
   exe TEXT PRIMARY KEY, name TEXT, first_seen INTEGER, size INTEGER, mtime INTEGER,
   sha256 TEXT, sig_status TEXT, sig_checked_at INTEGER, ignored INTEGER DEFAULT 0);
@@ -872,6 +884,7 @@ class Writer(threading.Thread):
         self.con = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
         self.con.execute("PRAGMA journal_mode=WAL")
         self.con.execute("PRAGMA synchronous=NORMAL")
+        self.replay_unsaved()
         while not self.finish.is_set():
             self.finish.wait(self.cfg["flush_interval"])
             self._flush()
@@ -925,20 +938,161 @@ class Writer(threading.Thread):
             cut_min = now - self.cfg["retention_minutes_days"] * 86400
             cut_all = now - self.cfg["retention_days"] * 86400
             cut_raw = now - self.cfg["watch_raw_days"] * 86400
+            # З'єднання і запуски процесів — найбільші таблиці (браузер дає
+            # ~2000 запусків і тисячі адрес на день). Тримати їх рік, як денні
+            # підсумки, немає сенсу — у них свій, коротший строк.
+            cut_conn = now - int(self.cfg.get("retention_conn_days", 60)) * 86400
             with self.flock, self.con:
                 self.con.execute("DELETE FROM app_minute WHERE minute_ts < ?", (cut_min,))
                 self.con.execute("DELETE FROM net_minute WHERE minute_ts < ?", (cut_min,))
                 self.con.execute("DELETE FROM sys_minute WHERE minute_ts < ?", (cut_min,))
                 self.con.execute("DELETE FROM watch_raw WHERE ts < ?", (cut_raw,))
                 self.con.execute("DELETE FROM events WHERE ts < ?", (cut_all,))
-                self.con.execute("DELETE FROM net_conn WHERE last_ts < ?", (cut_all,))
+                self.con.execute("DELETE FROM net_conn WHERE last_ts < ?", (cut_conn,))
                 self.con.execute("DELETE FROM dns_seen WHERE last_ts < ?", (cut_all,))
-                self.con.execute("DELETE FROM proc_instances WHERE started_ts < ?", (cut_all,))
+                self.con.execute("DELETE FROM proc_instances WHERE started_ts < ?", (cut_conn,))
                 self.con.execute("DELETE FROM app_day WHERE day < date('now', ?)",
                                  (f"-{self.cfg['retention_days']} days",))
             log.info("Обслуговування БД виконано (ретенція, підсумок за %s)", yesterday)
+            self._maybe_vacuum()
         except Exception:
             log.exception("Помилка обслуговування БД")
+        # денні детектори — окремо, щоб їхня помилка не зламала ретенцію
+        for fn in (self._disk_forecast, self._autostart_diff):
+            try:
+                fn()
+            except Exception:
+                log.exception("Денний детектор %s впав", fn.__name__)
+
+    # ---- денні детектори ---------------------------------------------------
+    def _disk_forecast(self):
+        """
+        Раз на день записати вільне місце по дисках і за останніми 14 днями
+        порахувати, коли диск заповниться. Попереджаємо заздалегідь, а не
+        коли Windows уже гальмує на 98 %.
+        """
+        day = human_day()
+        rows = []
+        for part in psutil.disk_partitions(all=False):
+            # лише справжні записувані диски: CD/мережеві/тільки-читання
+            # й крихітні службові томи не прогнозуємо — вони «повні» завжди
+            opts = (part.opts or "").lower()
+            if "cdrom" in opts or "ro" in opts.split(","):
+                continue
+            try:
+                u = psutil.disk_usage(part.mountpoint)
+            except Exception:
+                continue
+            if u.total < 8 * 2**30:
+                continue
+            rows.append((day, part.mountpoint.rstrip("\\/"), int(u.free), int(u.total)))
+        if not rows:
+            return
+        with self.flock, self.con:
+            self.con.executemany(
+                "INSERT OR REPLACE INTO disk_free(day,drive,free_b,total_b) VALUES(?,?,?,?)",
+                rows)
+        n = getattr(self, "notifier", None)
+        if n is None:
+            return
+        o = n.opts()
+        for day_, drive, free, total in rows:
+            if not total:
+                continue
+            pct = (total - free) / total * 100
+            hist = q("SELECT day, free_b FROM disk_free WHERE drive=? ORDER BY day DESC LIMIT 14",
+                     (drive,))
+            days_left = None
+            if len(hist) >= 3:
+                # лінійний тренд: скільки байтів на день зникає
+                xs = list(range(len(hist)))[::-1]
+                ys = [h["free_b"] for h in hist][::-1]
+                nn = len(xs); mx = sum(xs) / nn; my = sum(ys) / nn
+                den = sum((x - mx) ** 2 for x in xs) or 1
+                slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / den
+                if slope < 0:
+                    days_left = free / -slope
+            if pct >= float(o.get("disk_pct", 95)):
+                n.notify("disk", f"Диск {drive} майже повний",
+                         f"Зайнято {pct:.0f}%, вільно {free / 2**30:.0f} ГБ. "
+                         "Windows починає гальмувати нижче 10–15 % вільного місця.",
+                         key=f"disk:{drive}")
+            elif days_left is not None and days_left <= float(o.get("disk_days", 7)):
+                n.notify("disk", f"Диск {drive} заповниться за ~{days_left:.0f} дн.",
+                         f"Вільно {free / 2**30:.0f} ГБ, зникає ~{-slope / 2**30:.1f} ГБ на день.",
+                         key=f"diskfc:{drive}")
+
+    def _autostart_diff(self):
+        """Новий запис у автозапуску, якого вчора не було → сповіщення."""
+        if not IS_WIN:
+            return
+        import startup_win
+        ids = {it.get("id"): it for it in (startup_win.list_startup().get("items") or [])}
+        r = q1("SELECT v FROM meta WHERE k='autostart_ids'")
+        known = set(json.loads(r["v"])) if r and r.get("v") else None
+        with self.flock, self.con:
+            self.con.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('autostart_ids',?)",
+                             (json.dumps(sorted(ids)),))
+        n = getattr(self, "notifier", None)
+        if known is None or n is None:
+            return                       # перший запуск — лише запам'ятали
+        for sid in set(ids) - known:
+            it = ids[sid]
+            n.notify("autostart", "Новий запис у автозапуску",
+                     f"{it.get('name')} — {it.get('command', '')[:120]}. "
+                     "Якщо ти цього не ставив — вимкни у «Здоров'я» або «Автозапуск».",
+                     key=f"autostart:{sid}")
+
+    def replay_unsaved(self):
+        """
+        Повернути в базу те, що не встигли записати при минулій зупинці
+        (logs/unsaved.jsonl). Раніше файл лише писався — і ніхто ніколи
+        його не читав, тож урятоване тут же осиротіло.
+        """
+        path = os.path.join(LOG_DIR, "unsaved.jsonl")
+        if not os.path.exists(path):
+            return
+        done = 0
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        j = json.loads(line)
+                        self.jobs.append((j["sql"], tuple(j["params"])))
+                        done += 1
+                    except Exception:
+                        continue
+            os.replace(path, path + "." + time.strftime("%Y%m%d%H%M%S") + ".done")
+            log.info("Повернув у чергу %d незбережених операцій з минулої зупинки", done)
+        except Exception:
+            log.exception("Не вдалося повернути незбережені операції")
+
+    def _maybe_vacuum(self):
+        """
+        Раз на місяць: перевірка цілісності + VACUUM. Видалені ретенцією рядки
+        не повертають місце на диску самі — без цього база лише росте.
+        Виконується під час денного обслуговування (зазвичай уночі).
+        """
+        month = time.strftime("%Y-%m")
+        try:
+            with self.flock:
+                r = self.con.execute("SELECT v FROM meta WHERE k='last_vacuum'").fetchone()
+                if r and r[0] == month:
+                    return
+                t0 = time.monotonic()
+                chk = self.con.execute("PRAGMA quick_check").fetchone()
+                if not chk or chk[0] != "ok":
+                    log.warning("Перевірка бази: %s", chk[0] if chk else "?")
+                before = os.path.getsize(DB_PATH)
+                self.con.execute("VACUUM")
+                after = os.path.getsize(DB_PATH)
+                with self.con:
+                    self.con.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('last_vacuum',?)",
+                                     (month,))
+            log.info("VACUUM: %.0f → %.0f МБ за %.1f с", before / 2**20, after / 2**20,
+                     time.monotonic() - t0)
+        except Exception:
+            log.exception("VACUUM не вдався")
 
     def rollup_day(self, day):
         """Згорнути похвилинні дані дня у app_day (виживає після ретенції хвилин)."""
@@ -1118,6 +1272,14 @@ class Sampler(threading.Thread):
         self.live = {"ts": 0, "ncpu": self.ncpu, "cpu_total": 0.0,
                      "ram_used": 0, "ram_total": 0, "apps": []}
         self.live_lock = threading.Lock()
+        # --- детектори для сповіщень (див. notify.py) -----------------------
+        self.notifier = None          # ставить run_collector після старту трея
+        self._ram_hits = 0            # поспіль тиків із пам'яттю вище порога
+        self._busy = {}               # name → {"s": секунд порожнього циклу, "notified"}
+        self._temp_ts = 0             # коли востаннє дивились температури
+        self._susp_ts = 0             # коли востаннє перевіряли підозрілість
+        self._net_seen = set()        # імена, для яких мережу вже бачили
+        self._susp_notified = set()
         # серцебиття збирача: коли востаннє закінчив цикл і що робить зараз.
         # Потрібне, щоб «збирач зайнятий» могло назвати, чим саме.
         self.last_tick = time.time()
@@ -1617,6 +1779,11 @@ class Sampler(threading.Thread):
             self.writer.push("INSERT INTO events(ts,kind,name,info) VALUES(?,?,?,?)",
                              (its, "monitor_start", "PC Monitor",
                               f"монітор запущено; активних процесів: {len(seen)}"))
+        else:
+            try:
+                self._detectors(its, dt, live_apps, vm, net_by_name)
+            except Exception:
+                log.exception("Детектори сповіщень впали")
 
         # синхронізація CPU-часу довгоживучих інстансів кожні 10 хв
         if its - self.last_inst_sync > 600:
@@ -1671,6 +1838,112 @@ class Sampler(threading.Thread):
                 "INSERT INTO events(ts,kind,name,exe,pid,info) VALUES(?,?,?,?,?,?)",
                 (its, "process_start", lname, exe, pid,
                  f"запущено{' (батько: ' + parent_name + ')' if parent_name else ''}"))
+            # програма зі списку стеження запустилась — це і є «пастка»
+            if self.notifier is not None and lname in self.watchset:
+                try:
+                    self.notifier.notify(
+                        "watch", "Запустилась програма зі стеження",
+                        f"{lname} (pid {pid})"
+                        + (f", запустив {parent_name}" if parent_name else ""),
+                        key=f"watch:{lname}:{pid}")
+                except Exception:
+                    pass
+
+    # ---- детектори сповіщень ------------------------------------------------
+    def _detectors(self, its, dt, live_apps, vm, net_by_name):
+        """
+        Усе, про що монітор може попередити САМ, не чекаючи погляду у вікно.
+        Кожна перевірка дешева (працює на вже зібраних даних тику) і має
+        свій перемикач у налаштуваннях сповіщень.
+        """
+        n = self.notifier
+        if n is None:
+            return
+        o = n.opts()
+
+        # 1. Тиск на пам'ять: три тики поспіль вище порога → сповіщення з
+        #    назвою найбільшого споживача.
+        if vm.total:
+            pct = vm.used / vm.total * 100
+            if pct >= float(o.get("ram_pct", 90)):
+                self._ram_hits += 1
+                if self._ram_hits == 3:
+                    top = max(live_apps, key=lambda a: a["rss"], default=None)
+                    n.notify("memory", "Оперативна пам'ять майже закінчилась",
+                             f"Зайнято {pct:.0f}% із {vm.total / 2**30:.0f} ГБ"
+                             + (f" — найбільше {top['name']}: {top['rss'] / 2**30:.1f} ГБ"
+                                if top else ""), key="memory")
+            else:
+                self._ram_hits = 0
+
+        # 2. Порожній цикл: одне ядро з'їдене рівно, пам'ять мала, диск і
+        #    мережа мовчать — це не робота, а busy-wait. Рахуємо час у такому
+        #    стані; 30 хвилин поспіль → сповіщення (раз на день на програму).
+        for a in live_apps:
+            busy = (0.85 <= a["cores1"] <= 1.25 and a["rss"] < 400 * 2**20
+                    and a["disk_bps"] < 200 * 1024 and a["net_bps"] < 50 * 1024)
+            st = self._busy.setdefault(a["name"], {"s": 0.0, "notified": 0})
+            if busy:
+                st["s"] += dt
+            else:
+                st["s"] = max(0.0, st["s"] - dt * 3)     # швидко «забуваємо»
+            if st["s"] >= 1800 and its - st["notified"] > 86400:
+                st["notified"] = its
+                n.notify("busy_loop", "Програма крутить порожній цикл",
+                         f"{a['name']} тримає рівно одне ядро вже {st['s'] / 60:.0f} хв "
+                         f"при {a['rss'] / 2**20:.0f} МБ пам'яті — схоже на цикл без "
+                         f"затримки. Так це коштує ~24 ядро-години на добу.",
+                         key=f"busy:{a['name']}")
+
+        # 3. Нова програма вперше в мережі: перший мережевий байт від імені,
+        #    чий exe з'явився менш ніж добу тому.
+        for lname in net_by_name:
+            if lname in self._net_seen or lname.startswith("("):
+                continue
+            self._net_seen.add(lname)
+            try:
+                r = q1("SELECT MIN(first_seen) fs, MAX(exe) exe FROM exe_info WHERE name=?",
+                       (lname,))
+            except Exception:
+                r = None
+            if r and r.get("fs") and its - int(r["fs"]) < 86400:
+                n.notify("new_net", "Нова програма вийшла в мережу",
+                         f"{lname} з'явилась сьогодні і вже щось надсилає. "
+                         f"Файл: {r.get('exe') or '?'}", key=f"newnet:{lname}")
+
+        # 4. Температура — раз на хвилину, з даних, які й так кешуються.
+        if its - self._temp_ts >= 60:
+            self._temp_ts = its
+            try:
+                import sensors as _s
+                d = _s.read_all()
+                for g in (d.get("gpus") or []):
+                    if g.get("temp") is not None and g["temp"] >= float(o.get("gpu_temp_c", 85)):
+                        n.notify("temp", "Відеокарта перегрівається",
+                                 f"{g.get('name') or 'GPU'}: {g['temp']} °C"
+                                 + (f", вентилятор {g['fan']}%" if g.get("fan") is not None else ""),
+                                 key="temp:gpu")
+                for x in (d.get("disks") or []):
+                    if x.get("temp") is not None and x["temp"] >= float(o.get("disk_temp_c", 60)):
+                        n.notify("temp", "Накопичувач гарячий",
+                                 f"{x.get('name')}: {x['temp']} °C", key=f"temp:{x.get('name')}")
+            except Exception:
+                pass
+
+        # 5. Підозрілість — раз на 5 хвилин через зведення дня (воно кешоване).
+        if its - self._susp_ts >= 300:
+            self._susp_ts = its
+            try:
+                d = build_day(self.cfg, human_day())
+                for a in d["apps"]:
+                    if a.get("suspicious") and a["name"] not in self._susp_notified:
+                        self._susp_notified.add(a["name"])
+                        why = (a.get("suspicion_reasons") or [""])[0]
+                        n.notify("suspicious", "Програма набрала поріг підозрілості",
+                                 f"{a['name']} — {a['suspicion_score']} балів. {why}",
+                                 key=f"susp:{a['name']}")
+            except Exception:
+                pass
 
     def finalize_minute(self):
         if self.minute_idx is None:
@@ -1923,6 +2196,27 @@ def build_day(cfg, date, sampler=None):
             if r["name"] in apps:
                 apps[r["name"]]["night_cpu_max"] = r["m"]
 
+    # довіра за видавцем: дійсний підпис від довіреного видавця = довірена
+    # програма, скільки б файлів і версій у неї не було
+    try:
+        trusted_signers = {r["signer"] for r in q("SELECT signer FROM trusted_signers")}
+    except Exception:
+        trusted_signers = set()
+    for a in apps.values():
+        if (trusted_signers and a.get("sig_signer") in trusted_signers
+                and str(a.get("sig_status") or "").lower() == "valid"):
+            a["ignored"] = True
+            a["trusted_by_signer"] = True
+        # Порожній цикл за день: у середньому по активних хвилинах ~одне ядро,
+        # без піків, мала пам'ять, майже без диска — сигнатура busy-wait.
+        nmin = a.get("nmin") or 0
+        if nmin >= 30:
+            avg_cores = (a.get("cpu_core_s") or 0) / (nmin * 60.0)
+            if (0.8 <= avg_cores <= 1.25 and (a.get("cores_max") or 0) <= 1.4
+                    and (a.get("rss_max") or 0) < 400 * 2**20
+                    and ((a.get("read_b") or 0) + (a.get("write_b") or 0)) < 200 * 2**20):
+                a["busy_loop"] = True
+
     # watch-мітки
     watch = {r["name"] for r in q("SELECT name FROM watchlist")}
     scfg = cfg.get("suspicion", {})
@@ -1936,11 +2230,22 @@ def build_day(cfg, date, sampler=None):
             baseline_days = (now - int(r["v"])) / 86400.0
     except Exception:
         pass
+    # Імена, що вже траплялись ДО цього дня під будь-яким шляхом: оновлена
+    # програма з версією в шляху (VS Code, Discord, Claude) — не «новачок».
+    seen_names = set()
+    if day_start_ts:
+        try:
+            seen_names = {(r["name"] or "").lower() for r in
+                          q("SELECT DISTINCT name FROM exe_info WHERE first_seen < ?",
+                            (day_start_ts,))}
+        except Exception:
+            pass
     out = []
     for a in apps.values():
         a["watching"] = a["name"] in watch
         a["day_start_ts"] = day_start_ts
         a["baseline_days"] = baseline_days
+        a["name_seen_before"] = a["name"] in seen_names
         score, reasons = suspicion.evaluate(a, scfg)
         a["suspicion_score"] = score
         a["suspicion_reasons"] = reasons
@@ -1949,11 +2254,130 @@ def build_day(cfg, date, sampler=None):
                        and not suspicion.has_real_path(a.get("exe")))
         a.pop("day_start_ts", None)
         a.pop("baseline_days", None)
+        a.pop("name_seen_before", None)
         out.append(a)
     out.sort(key=lambda x: -(x.get("cpu_core_s") or 0))
     result = {"date": date, "minutes_available": minutes_available, "apps": out}
     _day_cache[date] = (now, result)
     return result
+
+
+def _range_days(date, rng):
+    """(перший день, останній день) для тижня/місяця, що закінчується date."""
+    import datetime as _dt
+    end = _dt.date.fromisoformat(date)
+    start = end - _dt.timedelta(days=6 if rng == "week" else 29)
+    return start.isoformat(), end.isoformat()
+
+
+def _agg_days(d0, d1):
+    """Зведення програм за проміжок днів із app_day (денні підсумки)."""
+    rows = q("""SELECT name, MAX(exe) exe, SUM(cpu_core_s) cpu_core_s,
+                       MAX(COALESCE(cores_max,0)) cores_max, MAX(rss_max) rss_max,
+                       SUM(read_b) read_b, SUM(write_b) write_b,
+                       SUM(sent_b) sent_b, SUM(recv_b) recv_b, SUM(ninst) ninst,
+                       COUNT(*) days_active
+                FROM app_day WHERE day>=? AND day<=? GROUP BY name""", (d0, d1))
+    return {r["name"]: r for r in rows}
+
+
+def build_range(cfg, date, rng="week"):
+    """
+    Тиждень або місяць одним зведенням + дайджест: що змінилось проти
+    попереднього такого ж періоду, нові програми, найбільші зростання.
+    Працює з app_day — денні підсумки живуть рік, тож ретенція хвилин
+    тут ні до чого.
+    """
+    import datetime as _dt
+    d0, d1 = _range_days(date, rng)
+    span = 7 if rng == "week" else 30
+    p1 = (_dt.date.fromisoformat(d0) - _dt.timedelta(days=1)).isoformat()
+    p0 = (_dt.date.fromisoformat(d0) - _dt.timedelta(days=span)).isoformat()
+    cur, prev = _agg_days(d0, d1), _agg_days(p0, p1)
+    # сьогоднішній день ще не згорнутий в app_day — доклеюємо з хвилин
+    today = human_day()
+    if d0 <= today <= d1:
+        for a in build_day(cfg, today)["apps"]:
+            r = cur.setdefault(a["name"], {"name": a["name"], "exe": a.get("exe"),
+                                           "cpu_core_s": 0, "cores_max": 0, "rss_max": 0,
+                                           "read_b": 0, "write_b": 0, "sent_b": 0,
+                                           "recv_b": 0, "ninst": 0, "days_active": 0})
+            for k in ("cpu_core_s", "read_b", "write_b", "sent_b", "recv_b", "ninst"):
+                r[k] = (r.get(k) or 0) + (a.get(k) or 0)
+            r["cores_max"] = max(r.get("cores_max") or 0, a.get("cores_max") or 0)
+            r["rss_max"] = max(r.get("rss_max") or 0, a.get("rss_max") or 0)
+            r["days_active"] = (r.get("days_active") or 0) + 1
+            r["exe"] = r.get("exe") or a.get("exe")
+
+    # підпис/довіра — з exe_info, як у дні
+    exes = {r.get("exe") for r in cur.values() if r.get("exe")}
+    info = {}
+    if exes:
+        marks = ",".join("?" for _ in exes)
+        for r in q(f"SELECT exe, sig_status, sig_signer, ignored FROM exe_info "
+                   f"WHERE exe COLLATE NOCASE IN ({marks})", tuple(exes)):
+            info[(r["exe"] or "").lower()] = r
+
+    apps = []
+    for name, r in cur.items():
+        pr = prev.get(name) or {}
+        i = info.get((r.get("exe") or "").lower()) or {}
+        a = dict(r)
+        a["cpu_core_s"] = round(a.get("cpu_core_s") or 0, 1)
+        a["prev_core_s"] = round(pr.get("cpu_core_s") or 0, 1)
+        a["delta_core_s"] = round(a["cpu_core_s"] - a["prev_core_s"], 1)
+        a["prev_sent_b"] = pr.get("sent_b") or 0
+        a["sig_status"] = i.get("sig_status")
+        a["sig_signer"] = i.get("sig_signer")
+        a["ignored"] = bool(i.get("ignored"))
+        a["suspicion_score"] = 0
+        a["suspicion_reasons"] = []
+        a["suspicious"] = False
+        apps.append(a)
+    apps.sort(key=lambda x: -(x["cpu_core_s"] or 0))
+
+    # дайджест
+    t0 = int(_dt.datetime.fromisoformat(d0).timestamp())
+    t1 = int((_dt.datetime.fromisoformat(d1) + _dt.timedelta(days=1)).timestamp())
+    new_exes = q("SELECT name, exe, first_seen FROM exe_info WHERE first_seen>=? AND first_seen<? "
+                 "ORDER BY first_seen DESC LIMIT 40", (t0, t1))
+    gone = [{"name": n, "prev_core_s": round(p.get("cpu_core_s") or 0, 1)}
+            for n, p in prev.items() if n not in cur and (p.get("cpu_core_s") or 0) > 600]
+    gone.sort(key=lambda x: -x["prev_core_s"])
+    growers = sorted([a for a in apps if a["delta_core_s"] > 600],
+                     key=lambda x: -x["delta_core_s"])[:8]
+    total_cur = sum(a["cpu_core_s"] for a in apps)
+    total_prev = sum((p.get("cpu_core_s") or 0) for p in prev.values())
+    sysr = q1("""SELECT AVG(cpu_avg) cpu_avg, MAX(ram_used) ram_max, SUM(sent_b) sent,
+                        SUM(recv_b) recv, COUNT(*) minutes FROM sys_minute
+                 WHERE minute_ts>=? AND minute_ts<?""", (t0, t1)) or {}
+    per_day = q("""SELECT day, SUM(cpu_core_s) core_s, SUM(sent_b) sent, SUM(recv_b) recv
+                   FROM app_day WHERE day>=? AND day<=? GROUP BY day ORDER BY day""", (d0, d1))
+    digest = {
+        "period": {"from": d0, "to": d1, "prev_from": p0, "prev_to": p1},
+        "total_core_h": round(total_cur / 3600, 1),
+        "prev_core_h": round(total_prev / 3600, 1),
+        "new_exes": new_exes, "gone": gone[:8], "growers": growers,
+        "sys": sysr, "per_day": per_day,
+    }
+    return {"date": date, "range": rng, "from": d0, "to": d1, "apps": apps,
+            "digest": digest, "minutes_available": False}
+
+
+def export_csv(cfg, date, rng="day"):
+    """Таблиця програм у CSV (для Excel) — у папку exports/."""
+    import csv
+    d = build_range(cfg, date, rng) if rng in ("week", "month") else build_day(cfg, date)
+    os.makedirs(EXPORT_DIR, exist_ok=True)
+    fn = os.path.join(EXPORT_DIR, f"apps_{rng}_{date}.csv")
+    cols = ["name", "exe", "cpu_core_s", "cores_max", "rss_max", "read_b", "write_b",
+            "sent_b", "recv_b", "ninst", "suspicion_score", "sig_status", "sig_signer"]
+    with open(fn, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(cols)
+        for a in d["apps"]:
+            w.writerow([a.get(c, "") if a.get(c) is not None else "" for c in cols])
+    return {"ok": True, "path": fn, "rows": len(d["apps"])}
 
 
 def _empty_app(name):
@@ -2295,6 +2719,15 @@ def kill_process(pid, expect_name=""):
         return False, str(e)
 
 
+def _crashes_safe(name):
+    """Падіння програми з журналу Windows (кешовано в health), без винятків."""
+    try:
+        import health as _h
+        return _h.crashes_for(name)
+    except Exception:
+        return []
+
+
 def process_card(ctx, name, date=None):
     """
     Повна картка однієї програми: живі дані по кожному процесу + історія.
@@ -2345,10 +2778,10 @@ def process_card(ctx, name, date=None):
     find_ms = round((time.time() - t_scan) * 1000)
 
     # --- КРОК 2: подробиці лише по знайдених ------------------------------
-    MAX_PROCS = 80                       # межа для родин на кшталт chrome.exe
+    MAX_PROCS = 80                       # глибокі подробиці — для перших 80
     BUDGET_S = 6.0                       # більше цього не збираємо — краще
     deadline = time.time() + BUDGET_S    # неповна картка, ніж «зависла» картка
-    partial = len(targets) > MAX_PROCS
+    partial = False                      # хвіст понад 80 додаємо дешево (нижче)
     pname_cache = {}                     # ppid → ім'я батька, щоб не питати двічі
 
     def _pname(pid):
@@ -2444,6 +2877,24 @@ def process_card(ctx, name, date=None):
             g["rss"] += r.get("rss") or 0
         for g in roles.values():
             g["cores"] = round(g["cores"], 2)
+    # Хвіст родини понад MAX_PROCS: лише pid/пам'ять, без командних рядків
+    # і заміру CPU — щоб Chrome із 120 процесами не обрізався на 80-му.
+    for p in targets[MAX_PROCS:]:
+        if time.time() > deadline:
+            partial = True
+            break
+        try:
+            with p.oneshot():
+                rss = p.memory_info().rss
+                procs.append({"pid": p.pid, "ppid": p.ppid(), "rss": rss,
+                              "threads": p.num_threads(), "status": p.status(),
+                              "started": int(p.create_time() or 0), "parent": "",
+                              "conns": (conns_by_pid.get(p.pid, 0)
+                                        if conns_by_pid is not None else None),
+                              "tail": True})
+                total["rss"] += rss
+        except Exception:
+            continue
     procs.sort(key=lambda r: (-(r.get("cores") or 0), -r["rss"]))
     scan_ms = round((time.time() - t_conn) * 1000)
 
@@ -2483,6 +2934,7 @@ def process_card(ctx, name, date=None):
         "name": lname, "date": date, "exe": exe, "ncpu": ncpu,
         "processes": procs, "nproc": len(procs), "total": total,
         "roles": sorted(roles.values(), key=lambda g: -g["cores"]) if roles else None,
+        "crashes": _crashes_safe(lname) if deep else [],
         "live": live, "summary": summary, "exe_info": info,
         "minutes": minutes, "net_minutes": netmin,
         "connections": conns, "domains": domains,
@@ -2548,6 +3000,34 @@ def export_app(cfg, name, date=None):
 
 
 # ------------------------------------------------------------- HTTP-сервер ----
+_persist_cache = {}
+
+
+def _persist_result(name, data):
+    """Зберегти результат інструмента (затримки, DPC), щоб пережив перезапуск."""
+    try:
+        if _persist_cache.get(name) is data:
+            return
+        _persist_cache[name] = data
+        d = dict(data)
+        d["saved_at"] = int(time.time())
+        with open(os.path.join(DATA_DIR, f"{name}_last.json"), "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False)
+    except Exception:
+        log.exception("Не вдалося зберегти результат %s", name)
+
+
+def _load_result(name):
+    try:
+        with open(os.path.join(DATA_DIR, f"{name}_last.json"), encoding="utf-8") as f:
+            d = json.load(f)
+        d["running"] = False
+        d["restored"] = True
+        return d
+    except Exception:
+        return None
+
+
 class HealthRunner:
     """
     Виконує перевірки стану у фоновому потоці, щоб інтерфейс не завмирав:
@@ -2698,6 +3178,7 @@ _BUSY_TITLES = {
     "/api/health": "перевірка здоров'я",
     "/api/latency": "вимір затримок",
     "/api/dpcisr": "трасування драйверів",
+    "/api/wmitrace": "трасування WMI",
     "/api/export": "експорт звіту",
     "/api/export_all": "загальний експорт",
     "/api/whostarts": "пошук, хто запускає програму",
@@ -2827,6 +3308,7 @@ def make_handler(ctx: Ctx):
                 mt, mu = g.get("mem_total") or 0, g.get("mem_used") or 0
                 self._json({
                     "ok": True,
+                    "lang": str(ctx.cfg.get("lang", "uk")).lower(),
                     "gpu_temp": g.get("temp"),
                     "gpu_fan": g.get("fan"),
                     "gpu_power": g.get("power_w"),
@@ -2915,7 +3397,33 @@ def make_handler(ctx: Ctx):
                 elif path == "/api/overview":
                     self._json(self.overview(date))
                 elif path == "/api/apps":
-                    self._json(build_day(ctx.cfg, date))
+                    rng = qs.get("range", "day")
+                    if rng in ("week", "month"):
+                        self._json(build_range(ctx.cfg, date, rng))
+                    else:
+                        self._json(build_day(ctx.cfg, date))
+                elif path == "/api/export_csv":
+                    self._json(export_csv(ctx.cfg, date, qs.get("range", "day")))
+                elif path == "/api/notify":
+                    n = getattr(ctx, "notifier", None)
+                    self._json({"history": (n.history[-50:] if n else []),
+                                "opts": (n.opts() if n else {}),
+                                "tray": bool(n and n.icon is not None),
+                                "hotkey": {"ok": bool(getattr(ctx, "hotkey", None) and ctx.hotkey.ok),
+                                           "error": getattr(getattr(ctx, "hotkey", None), "error", "")}})
+                elif path == "/api/wmitrace":
+                    w = getattr(ctx, "wmitrace", None)
+                    if w:
+                        st = w.status()
+                        if not st["running"] and st.get("result"):
+                            _persist_result("wmitrace", st)
+                        self._json(st)
+                    else:
+                        self._json(_load_result("wmitrace") or
+                                   {"running": False, "result": None, "admin": is_admin()})
+                elif path == "/api/crashes":
+                    import health as _h
+                    self._json({"crashes": _h.crashes_for(qs.get("name", ""))})
                 elif path == "/api/live":
                     if ctx.sampler:
                         with ctx.sampler.live_lock:
@@ -2962,12 +3470,21 @@ def make_handler(ctx: Ctx):
                         "version": VERSION,
                         "python": sys.version.split()[0],
                         "tray": tray_pin_status(),
+                        "notify_opts": (ctx.notifier.opts()
+                                        if getattr(ctx, "notifier", None) else {}),
+                        "hotkey": {"ok": bool(getattr(ctx, "hotkey", None) and ctx.hotkey.ok),
+                                   "error": getattr(getattr(ctx, "hotkey", None), "error", "")},
                     })
                 elif path == "/api/health":
                     self._json(ctx.health.status())
                 elif path == "/api/latency":
-                    self._json(ctx.latency.status() if ctx.latency
-                               else {"running": False, "result": None})
+                    if ctx.latency:
+                        st = ctx.latency.status()
+                        if not st.get("running") and st.get("result"):
+                            _persist_result("latency", st)
+                        self._json(st)
+                    else:
+                        self._json(_load_result("latency") or {"running": False, "result": None})
                 elif path == "/api/startup":
                     import startup_win
                     self._json({"startup": startup_win.list_startup(),
@@ -3009,7 +3526,12 @@ def make_handler(ctx: Ctx):
                     self._json(process_card(ctx, qs.get("name", ""), date))
                 elif path == "/api/dpcisr":
                     if ctx.dpcisr:
-                        self._json(ctx.dpcisr.status())
+                        st = ctx.dpcisr.status()
+                        if not st.get("running") and st.get("result"):
+                            _persist_result("dpcisr", st)
+                        self._json(st)
+                    elif _load_result("dpcisr"):
+                        self._json(_load_result("dpcisr"))
                     else:
                         info = {}
                         try:
@@ -3244,6 +3766,28 @@ def make_handler(ctx: Ctx):
                         res["human"] = h[0] if h else ""
                         res["explain"] = h[1] if h else ""
                     self._json(res)
+                elif path == "/api/trust_signer":
+                    signer = (body.get("signer") or "").strip()[:120]
+                    if not signer:
+                        self._json({"ok": False, "error": "видавця не вказано"})
+                    elif body.get("on", True):
+                        ctx.writer.exec_now(
+                            "INSERT OR REPLACE INTO trusted_signers(signer,ts) VALUES(?,?)",
+                            (signer, int(time.time())))
+                        _day_cache.clear()
+                        self._json({"ok": True, "signer": signer})
+                    else:
+                        ctx.writer.exec_now("DELETE FROM trusted_signers WHERE signer=?", (signer,))
+                        _day_cache.clear()
+                        self._json({"ok": True, "signer": signer, "removed": True})
+                elif path == "/api/notify_test":
+                    n = getattr(ctx, "notifier", None)
+                    ok = bool(n and n.test())
+                    err = ("" if ok else
+                           "центр сповіщень не запущено" if n is None else
+                           "трей недоступний (запущено з --no-tray?)" if n.icon is None else
+                           "сповіщення вимкнено в налаштуваннях")
+                    self._json({"ok": ok, "error": err})
                 elif path == "/api/trust":
                     name = (body.get("name") or "").lower()
                     exe = body.get("exe") or ""
@@ -3289,6 +3833,8 @@ def make_handler(ctx: Ctx):
                         patch["retention_minutes_days"] = max(1, min(3650, int(patch["retention_minutes_days"])))
                     if "retention_days" in patch:
                         patch["retention_days"] = max(1, min(3650, int(patch["retention_days"])))
+                    if "retention_conn_days" in patch:
+                        patch["retention_conn_days"] = max(1, min(3650, int(patch["retention_conn_days"])))
                     cfg = save_config(patch)
                     # що застосується лише після перезапуску збирача
                     needs_restart = any(k in patch for k in (
@@ -3300,9 +3846,21 @@ def make_handler(ctx: Ctx):
                     self._json({"ok": True, "config": cfg, "needs_restart": needs_restart})
                 elif path == "/api/health":
                     mode = body.get("mode", "quick")
+                    import health as _h
+                    _h.IGNORE_SOURCES = {str(x).lower() for x in
+                                         (ctx.cfg.get("health_ignore_sources") or [])}
                     started = ctx.health.start(mode)
                     self._json({"ok": started,
                                 "error": "" if started else "сканування вже виконується"})
+                elif path == "/api/health_ignore":
+                    src = (body.get("source") or "").strip()
+                    lst = [s for s in (ctx.cfg.get("health_ignore_sources") or [])
+                           if s.lower() != src.lower()]
+                    if src and body.get("on", True):
+                        lst.append(src)
+                    cfg2 = save_config({"health_ignore_sources": lst})
+                    ctx.cfg.update(cfg2)
+                    self._json({"ok": True, "ignored": lst})
                 elif path == "/api/latency":
                     act = body.get("action", "start")
                     if act == "stop":
@@ -3333,6 +3891,20 @@ def make_handler(ctx: Ctx):
                         ctx.dpcisr = DpcIsrTrace(int(body.get("seconds", 15)))
                         threading.Thread(target=ctx.dpcisr.run,
                                          name="dpcisr", daemon=True).start()
+                        self._json({"ok": True})
+                elif path == "/api/wmitrace":
+                    act = body.get("action", "start")
+                    w = getattr(ctx, "wmitrace", None)
+                    if act == "cancel":
+                        if w:
+                            w.cancel()
+                        self._json({"ok": True})
+                    elif w and w.running:
+                        self._json({"ok": False, "error": "трасування вже виконується"})
+                    else:
+                        import wmitrace as _w
+                        ctx.wmitrace = _w.WmiTrace(int(body.get("seconds", 30)))
+                        ctx.wmitrace.start()
                         self._json({"ok": True})
                 elif path == "/api/autostart":
                     ok, msg = autostart_set(bool(body.get("on")))
@@ -3555,18 +4127,39 @@ def tray_pin_set(on):
     return {"ok": True, "changed": changed, "pinned": bool(on)}
 
 
-def start_tray(cfg):
+def _tray_image(cpu=None, ram=None):
+    """
+    Значок трея. Без даних — фірмові три стовпчики; з даними — живий
+    стовпчик CPU (ліворуч) і RAM (праворуч), як у Диспетчері задач. Малюється
+    раз на 5 с, коштує мікросекунди.
+    """
+    from PIL import Image, ImageDraw
+    img = Image.new("RGBA", (64, 64), (16, 19, 26, 255))
+    d = ImageDraw.Draw(img)
+    if cpu is None:
+        for i, h in enumerate((22, 38, 30)):
+            x = 10 + i * 16
+            d.rectangle((x, 54 - h, x + 12, 54), fill=(74, 222, 128, 255))
+        return img
+    def bar(x, pct, warm, hot):
+        d.rectangle((x, 8, x + 20, 56), fill=(38, 44, 56, 255))
+        h = int(48 * max(0.0, min(100.0, pct)) / 100.0)
+        col = (248, 113, 113) if pct >= hot else (251, 191, 36) if pct >= warm else (74, 222, 128)
+        if h:
+            d.rectangle((x, 56 - h, x + 20, 56), fill=col + (255,))
+    bar(10, cpu, 60, 85)
+    bar(34, ram or 0, 80, 92)
+    return img
+
+
+def start_tray(cfg, sampler=None):
     try:
         import pystray
         from PIL import Image, ImageDraw
     except Exception:
         log.info("pystray/Pillow недоступні — працюю без іконки в треї")
         return None
-    img = Image.new("RGBA", (64, 64), (16, 19, 26, 255))
-    d = ImageDraw.Draw(img)
-    for i, h in enumerate((22, 38, 30)):
-        x = 10 + i * 16
-        d.rectangle((x, 54 - h, x + 12, 54), fill=(74, 222, 128, 255))
+    img = _tray_image()
     def _open(icon, item):
         open_window(cfg)
     def _exports(icon, item):
@@ -3588,6 +4181,32 @@ def start_tray(cfg):
                         else "PC Monitor — збирає статистику", menu)
     t = threading.Thread(target=icon.run, name="tray", daemon=True)
     t.start()
+
+    # Живий значок: раз на 5 с перемальовуємо CPU/RAM. Вимикається в
+    # налаштуваннях (tray_live), тоді лишається статичний логотип.
+    def _live():
+        last = None
+        while not STOP.is_set():
+            STOP.wait(5)
+            if not cfg.get("tray_live", True) or sampler is None:
+                continue
+            try:
+                with sampler.live_lock:
+                    lv = sampler.live
+                    cpu = lv.get("cpu_total")
+                    ram = (lv["ram_used"] / lv["ram_total"] * 100) if lv.get("ram_total") else 0
+                if cpu is None:
+                    continue
+                key = (int(cpu / 4), int(ram / 4))     # не перемальовувати марно
+                if key == last:
+                    continue
+                last = key
+                icon.icon = _tray_image(cpu, ram)
+                icon.title = (("CPU %.0f%% · RAM %.0f%%" if en else "CPU %.0f%% · RAM %.0f%%")
+                              % (cpu, ram))
+            except Exception:
+                pass
+    threading.Thread(target=_live, name="tray-live", daemon=True).start()
     return icon
 
 
@@ -3950,7 +4569,27 @@ def run_collector(cfg, with_tray=True, console=False):
     writer.push("INSERT OR IGNORE INTO meta(k,v) VALUES('installed_at',?)",
                 (str(int(time.time())),))
 
-    tray = start_tray(cfg) if with_tray else None
+    tray = start_tray(cfg, sampler) if with_tray else None
+
+    # Центр сповіщень: детектори збирача кидають події сюди, а він показує
+    # їх через значок у треї і пише у стрічку «Події».
+    import notify as _notify
+    def _evt(kind, title, msg):
+        writer.push("INSERT INTO events(ts,kind,name,info) VALUES(?,?,?,?)",
+                    (int(time.time()), "notify", kind, f"{title}: {msg}"))
+    ctx.notifier = _notify.Notifier(cfg, on_event=_evt)
+    ctx.notifier.icon = tray
+    sampler.notifier = ctx.notifier
+    writer.notifier = ctx.notifier
+
+    # Глобальна гаряча клавіша: показати вікно (або підняти вже відкрите)
+    if IS_WIN and cfg.get("hotkey"):
+        try:
+            import hotkey as _hk
+            ctx.hotkey = _hk.HotKey(cfg["hotkey"], lambda: open_window(cfg))
+            ctx.hotkey.start()
+        except Exception:
+            log.exception("Гаряча клавіша не запустилась")
 
     url = f"http://127.0.0.1:{cfg['dashboard_port']}/"
     log.info("PC Monitor %s запущено: %s (ETW: %s)", VERSION, url,
@@ -3986,7 +4625,11 @@ def run_collector(cfg, with_tray=True, console=False):
 
     t_stop = time.monotonic()
     if etw:
-        _timed_stop("ETW", etw.stop, 10)
+        # За журналом ETW не завершується НІКОЛИ (6 із 6 зупинок упирались у
+        # таймаут) — pywintrace чекає на споживача, який уже не потрібен. Нам
+        # від ETW-сесії нічого дописувати не треба: даємо 2 с із ввічливості
+        # і йдемо далі; сесію ядра нова копія перезапустить сама.
+        _timed_stop("ETW", etw.stop, 6)
     # Порядок важливий: спершу даємо збирачу дописати свої останні дані
     # (він закриває відкриті процеси), і лише потім зупиняємо писаря.
     sampler.join(timeout=8)

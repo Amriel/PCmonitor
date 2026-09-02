@@ -106,6 +106,9 @@
   .card .v{font-size:21px;font-weight:600;margin-top:3px;font-variant-numeric:tabular-nums}
   .card .s{font-size:12px;color:var(--tx2);margin-top:2px}
   .card.alert .v{color:var(--org)}
+  .rangesel{display:inline-flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:3px}
+  .rangesel .btn{border:none;background:transparent}
+  .rangesel .btn.active{background:var(--panel2);color:var(--acc)}
 
   /* Температури: один компактний рядок під картками «Зараз».
      Окрема вкладка для трьох чисел була зайвою — тут вони поруч із
@@ -350,6 +353,7 @@
   #toast .row{display:flex;gap:8px;margin-top:8px}
   .empty{color:var(--tx2);text-align:center;padding:30px 10px;font-size:13.5px}
   .foot{color:#525b6b;font-size:11.5px;text-align:center;padding:10px 0 20px}
+.hbar{height:6px;background:var(--panel2,#1c2230);border-radius:4px;overflow:hidden;margin:8px 0}.hbar>div{height:100%;background:var(--acc,#4f8cff);transition:width .3s}
 </style>
 </head>
 <body>
@@ -446,6 +450,17 @@
 
   <!-- ══════════ ВКЛАДКА: ЗА ДЕНЬ ══════════ -->
   <section class="pane" data-pane="day">
+  <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+    <div class="rangesel" id="rangesel" title="За який проміжок дивитись. Тиждень і місяць закінчуються обраним днем.">
+      <button class="btn small active" data-range="day">День</button>
+      <button class="btn small" data-range="week">Тиждень</button>
+      <button class="btn small" data-range="month">Місяць</button>
+    </div>
+    <span class="muted" id="range-note" style="font-size:12.5px"></span>
+    <span style="flex:1"></span>
+    <button class="btn small" onclick="exportCsv()" title="Таблиця програм у CSV для Excel — у папку exports">⇩ CSV</button>
+  </div>
+  <div id="digest"></div>
   <div class="cards" id="cards"></div>
 
   <div class="charts">
@@ -549,6 +564,37 @@
             буфер і які програми за ним стежать.</div>
           <div class="tstat" id="st-clip">не перевірялось</div>
         </div>
+        <div class="tool" data-tool="wmi">
+          <div class="ic">🔍</div>
+          <div class="tt">Хто смикає WMI</div>
+          <div class="td">WmiPrvSE їсть процесор? Він лише виконує чужі запити.
+            30 секунд трасування — і клієнти названі поіменно.</div>
+          <div class="tstat" id="st-wmi">не трасувалось</div>
+        </div>
+      </div>
+    </div>
+    <div class="toolview" id="tool-wmi">
+      <div class="toolbar">
+        <button class="btn back">← Усі перевірки</button>
+        <b>🔍 Хто смикає WMI</b>
+        <span style="flex:1"></span>
+        <label class="muted" style="font-size:12.5px">секунд
+          <input type="number" id="w-sec" min="5" max="120" value="30" style="width:64px"></label>
+        <button class="btn" id="w-start">▶ Трасувати</button>
+        <button class="btn small" id="w-cancel" style="display:none">Скасувати</button>
+      </div>
+      <div class="panel">
+        <div class="muted" style="font-size:13px;margin-bottom:12px">
+          WmiPrvSE.exe сам нічого не робить — він виконує WMI-запити інших програм
+          (MSI Center, ASUS-агенти, антивірус, і наш монітор теж). Провайдер ETW
+          <b>Microsoft-Windows-WMI-Activity</b> записує клієнта кожного запиту.
+          Разово, за кліком, без драйверів; потрібні права адміністратора.
+        </div>
+        <div id="w-progress" style="display:none;margin-bottom:10px">
+          <div class="hbar"><div id="w-bar" style="width:0%"></div></div>
+          <div class="muted" id="w-stage" style="font-size:12.5px;margin-top:4px"></div>
+        </div>
+        <div id="w-result"></div>
       </div>
     </div>
 
@@ -746,7 +792,8 @@ const _I18N_RX=(window.I18N_RX||[]).map(([p,r])=>{
 // дрібні слова-статуси, які лишаються всередині вже перекладених шаблонів
 const _I18N_INLINE=[["активний","active"],["вимкнено в налаштуваннях","disabled in settings"],
   ["вимкнено","disabled"],["недоступно: не Windows","unavailable: not Windows"],
-  ["недоступно","unavailable"],["зупинено","stopped"],["немає","none"],["невідомо","unknown"]];
+  ["недоступно","unavailable"],["зупинено","stopped"],["немає","none"],["невідомо","unknown"],
+  ["зараз:","now:"],["· зараз ","· now "],["порівняно з","compared with"]];
 function t(s){
   if(LANG!=="en"||s==null) return s;
   const d=window.I18N_EN||{}; const k=String(s);
@@ -869,8 +916,17 @@ async function api(p,opt){
   if(!r.ok){
     let t=await r.text();
     try{ t=JSON.parse(t).error||t; }catch(e){}
+    // Після перезапуску збирача токен сесії новий, а сторінка ще стара:
+    // кожна кнопка мовчки давала 403. Тепер сторінка сама перезавантажується
+    // (один раз) і продовжує працювати — людині нічого робити не треба.
+    if(r.status===403 && /токен|token/i.test(t) && !sessionStorage.getItem("pcmon.reloaded")){
+      try{ sessionStorage.setItem("pcmon.reloaded","1"); }catch(e){}
+      toast("Монітор перезапускався — оновлюю сторінку…",3000);
+      setTimeout(()=>location.reload(),600);
+    }
     throw new Error(t);
   }
+  try{ sessionStorage.removeItem("pcmon.reloaded"); }catch(e){}
   return r.json();
 }
 function toast(html,ms=7000){ const el=$("#toast"); el.innerHTML=html;
@@ -1067,8 +1123,9 @@ async function loadOverview(){
       tooltip:{label:c=>c.dataset.label+": "+c.parsed.y.toFixed(2)+" МіБ/хв"}});
 }
 async function loadApps(){
-  const d=await api("/api/apps?date="+state.date);
-  state.apps=d.apps; renderApps(); renderSusp();
+  const rng=state.range||"day";
+  const d=await api("/api/apps?date="+state.date+(rng!=="day"?"&range="+rng:""));
+  state.apps=d.apps; state.rangeData=d; renderApps(); renderSusp(); renderDigest(d);
   $("#foot").textContent=EN
     ? "PC Monitor · data in data/pcmon.sqlite3 · exports in exports/ · "+
       (d.minutes_available?"per-minute detail available":"old day: daily summaries only")
@@ -1274,6 +1331,68 @@ setInterval(()=>{ if(state.tab!=="health") return;
 
 /* ---------- рендер ---------- */
 const UNATTRIBUTED="(трафік без програми)";
+/* ═══════════ ДІАПАЗОН ДАТ, ДАЙДЖЕСТ, CSV ═══════════ */
+state.range="day";
+document.querySelectorAll("#rangesel .btn").forEach(b=>b.onclick=()=>{
+  state.range=b.dataset.range;
+  document.querySelectorAll("#rangesel .btn").forEach(x=>x.classList.toggle("active",x===b));
+  loadApps();
+});
+function renderDigest(d){
+  const box=$("#digest"), note=$("#range-note");
+  if(!box) return;
+  if(!d||d.range==="day"||!d.digest){
+    box.innerHTML=""; if(note) note.textContent="";
+    const h=$("#apps-count"); return;
+  }
+  const g=d.digest, P=g.period;
+  if(note) note.textContent=t(`${P.from} — ${P.to} · порівняно з ${P.prev_from} — ${P.prev_to}`);
+  const dlt=g.total_core_h-g.prev_core_h;
+  const sign=v=>(v>0?"+":"")+v;
+  const rows=(g.growers||[]).map(a=>`<tr><td style="text-align:left"><b>${esc(a.name)}</b></td>
+      <td>${fcore(a.cpu_core_s)}</td><td>${fcore(a.prev_core_s)}</td>
+      <td style="color:${a.delta_core_s>0?"var(--org)":"var(--acc)"}">${sign((a.delta_core_s/3600).toFixed(1))} год</td></tr>`).join("");
+  const gone=(g.gone||[]).map(a=>`<span class="chip">${esc(a.name)} · було ${fcore(a.prev_core_s)}</span>`).join("");
+  const news=(g.new_exes||[]).slice(0,12).map(x=>`<span class="chip" title="${esc(x.exe||"")}">${esc(x.name||"")}</span>`).join("");
+  box.innerHTML=`<div class="panel">
+    <h2>Підсумок ${d.range==="week"?"тижня":"місяця"}</h2>
+    <div class="cards" style="margin-bottom:12px">
+      <div class="card"><div class="t">Ядро-години</div><div class="v">${g.total_core_h}</div>
+        <div class="s">попередній період: ${g.prev_core_h} (${sign(dlt.toFixed(1))})</div></div>
+      <div class="card"><div class="t">Нових програм</div><div class="v">${(g.new_exes||[]).length}</div>
+        <div class="s">exe, побачені вперше</div></div>
+      <div class="card"><div class="t">Зникли</div><div class="v">${(g.gone||[]).length}</div>
+        <div class="s">були активні, тепер ні</div></div>
+      <div class="card"><div class="t">Мережа</div><div class="v">↑ ${fb(g.sys&&g.sys.sent)}</div>
+        <div class="s">↓ ${fb(g.sys&&g.sys.recv)}</div></div>
+    </div>
+    ${rows?`<div style="font-size:13px;margin-bottom:6px"><b>Найбільше зросли</b></div>
+      <div class="minitable"><table><thead><tr><th style="text-align:left">Програма</th><th>Тепер</th><th>Було</th><th>Різниця</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`:""}
+    ${news?`<div style="font-size:13px;margin:10px 0 6px"><b>Нові програми</b></div><div style="display:flex;flex-wrap:wrap;gap:6px">${news}</div>`:""}
+    ${gone?`<div style="font-size:13px;margin:10px 0 6px"><b>Більше не працюють</b></div><div style="display:flex;flex-wrap:wrap;gap:6px">${gone}</div>`:""}
+  </div>`;
+  translateNode(box);
+}
+async function exportCsv(){
+  let r;
+  try{ r=await api("/api/export_csv?date="+state.date+"&range="+(state.range||"day")); }
+  catch(e){ toast("Помилка: "+esc(e.message)); return; }
+  toast(`✓ CSV збережено: ${esc(r.path)} (${r.rows} рядків)`,9000);
+}
+window.exportCsv=exportCsv;
+async function trustSigner(signer){
+  const q=LANG==="en"?`Trust every program with a valid signature from “${signer}”?\nThey will no longer appear in the attention list.`
+                     :`Довіряти всім програмам із дійсним підписом «${signer}»?\nВони більше не потраплятимуть у список уваги.`;
+  if(!confirm(q)) return;
+  let r; try{ r=await api("/api/trust_signer",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({signer,on:true})}); }
+  catch(e){ toast("Помилка: "+esc(e.message)); return; }
+  toast(r.ok?`✓ Видавець «${esc(signer)}» тепер довірений`:"Не вдалося: "+esc(r.error||""));
+  if(state.procOpen) openProc(state.procOpen);
+  loadApps();
+}
+window.trustSigner=trustSigner;
+
 function badge(a){
   let h="";
   // Це не програма, а зведений трафік, який не вдалося ні до кого прив'язати.
@@ -1289,6 +1408,8 @@ function badge(a){
      && a.first_seen_ts>=Date.parse(state.date)/1000) h+='<span class="tag new" title="Вперше з’явилась сьогодні">NEW</span>';
   if(a.watching) h+='<span class="tag eye" title="Детальне стеження увімкнено">👁</span>';
   if(a.suspicious) h+='<span class="tag sus" title="Є причини придивитись">⚠</span>';
+  if(a.busy_loop) h+='<span class="tag cb" title="Порожній цикл: рівно одне ядро годинами при малій пам\'яті й без диска — схоже на цикл без затримки. Коштує ~24 ядро-години на добу.">ПОРОЖНІЙ ЦИКЛ</span>';
+  if(a.trusted_by_signer) h+='<span class="tag" style="background:#12291c;color:var(--acc)" title="Довірена за видавцем підпису">✓ видавець</span>';
   return h;
 }
 function renderApps(){
@@ -1780,6 +1901,9 @@ function renderProc(d){
     kv("Шлях", esc(d.exe||"")),
     kv("Цифровий підпис", sigHtml(inf, d.exe||"")),
     kv("Підписав", inf.sig_signer?esc(inf.sig_signer)
+       +(String(inf.sig_status||"").toLowerCase()==="valid"
+         ?` <button class="btn small" style="margin-left:8px" onclick="trustSigner('${esc(inf.sig_signer).replace(/'/g,"\\'")}')"
+             title="Довіряти всім програмам із дійсним підписом цього видавця — після оновлень не доведеться тиснути «Довіряю» знову">✓ довіряти видавцю</button>`:"")
        :(inf.sig_status?'<span class="muted">видавця не вказано</span>':"")),
     kv("Ким виданий", inf.sig_issuer?esc(inf.sig_issuer):""),
     // Сертифікат може бути прострочений, і це САМО ПО СОБІ не проблема:
@@ -1859,6 +1983,15 @@ function renderProc(d){
           </tr></thead><tbody>${procs}</tbody></table></div>`
           :'<div class="muted" style="font-size:12.5px">Зараз не запущена</div>'}</div>
     </div>
+
+    ${d.crashes&&d.crashes.length?`<div class="psec"><h3>Падіння за 7 днів (${d.crashes.length})</h3>
+      <div class="muted" style="font-size:12px;margin-bottom:6px">З журналу Windows «Програми» (Event 1000/1002)</div>
+      ${d.crashes.slice(0,10).map(c=>`<div class="ev"><span class="t">${fts(c.ts)}</span>
+        <span class="k">${c.kind==="падіння"?"💥":"⏳"}</span>
+        <span class="info" style="flex:1">${esc(c.kind)}${c.module?` · модуль <b>${esc(c.module)}</b>`:""}</span></div>`).join("")}
+      ${d.crashes.some(c=>/nvlddmkm|nvwgf2|amdvlk|atidxx|d3d/i.test(c.module||""))
+        ?'<div class="hfix" style="margin-top:8px"><b>Підказка:</b> модуль падіння — графічний драйвер. Спробуй чистий перевстанов драйвера відеокарти (DDU) або відкат до попередньої версії.</div>':""}
+    </div>`:""}
 
     <div class="psec"><h3>Куди ходить у мережу</h3>
       ${doms?`<div style="margin-bottom:8px"><div class="muted" style="font-size:12px;margin-bottom:5px">Домени:</div>
@@ -2030,11 +2163,50 @@ function setTool(t){
   if(t==="scan") loadHealth();
   if(t==="lat"){ loadLatency(); loadDpc(); }
   if(t==="clip") { if(!state.clipData) checkClipboard(); }
+  if(t==="wmi") loadWmi();
   if(!t) renderHub();
   try{ localStorage.setItem("pcmon.tool",t||""); }catch(e){}
 }
 document.querySelectorAll(".tool").forEach(el=>el.onclick=()=>setTool(el.dataset.tool));
 document.querySelectorAll(".toolview .back").forEach(b=>b.onclick=()=>setTool(null));
+
+/* ═══════════ ХТО СМИКАЄ WMI ═══════════ */
+async function loadWmi(){
+  let d; try{ d=await api("/api/wmitrace"); }catch(e){ return; }
+  const run=!!d.running, box=$("#w-result");
+  $("#w-progress").style.display=run?"block":"none";
+  $("#w-cancel").style.display=run?"":"none";
+  $("#w-start").disabled=run;
+  if(run){ $("#w-bar").style.width=((d.progress||0)*100).toFixed(0)+"%";
+    $("#w-stage").textContent=d.stage||"…"; setTimeout(loadWmi,1000); return; }
+  if(d.error){ dom("w-result").innerHTML=`<div class="warnbox"><span>⚠</span><div>${esc(d.error)}</div></div>${renderDiag(d.diag)}`; return; }
+  const r=d.result; if(!r){ dom("w-result").innerHTML=""; return; }
+  const cl=r.clients||[], mx=Math.max(1,...cl.map(c=>c.count));
+  dom("w-result").innerHTML=`
+    <div class="verdict ${cl.length?"warn":"good"}"><b>Клієнти WMI за ${r.seconds} с</b>
+      Подій: ${r.events}, клієнтів: ${cl.length}${d.restored?' · <span class="muted">збережений результат</span>':""}</div>
+    ${cl.length?`<table style="font-size:12.5px"><thead><tr>
+      <th style="text-align:left">Програма</th><th>PID</th><th>Запитів</th><th>За хвилину</th><th style="text-align:left">Що питає</th><th style="width:120px"></th>
+      </tr></thead><tbody>${cl.map(c=>`<tr>
+        <td style="text-align:left" title="${esc(c.exe||"")}"><b>${esc(c.name)}</b></td>
+        <td class="muted">${c.pid}</td><td>${c.count}</td><td>${c.per_min}</td>
+        <td class="muted" style="text-align:left;font-size:11.5px">${(c.ops||[]).slice(0,2).map(o=>esc(o.op).slice(0,90)+" ×"+o.n).join("<br>")}</td>
+        <td><div class="cpubar-wrap" style="max-width:none"><div class="cpubar${c.count/mx>0.6?" hot":""}" style="width:${c.count/mx*100}%"></div></div></td>
+      </tr>`).join("")}</tbody></table>`:'<div class="empty">За цей час жодного WMI-запиту не було.</div>'}
+    ${r.hints&&r.hints.length?`<div class="hfix" style="margin-top:12px"><b>Що це означає:</b>
+      <ul style="margin:6px 0 0 17px">${r.hints.map(h=>`<li style="margin-bottom:4px">${esc(h)}</li>`).join("")}</ul></div>`:""}
+    ${renderDiag(d.diag)}`;
+  const st=$("#st-wmi"); if(st&&cl.length) st.innerHTML=`<b>${esc(cl[0].name)}</b> · ${cl[0].per_min}/хв`;
+}
+$("#w-start").onclick=async()=>{
+  const r=await api("/api/wmitrace",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({action:"start",seconds:+$("#w-sec").value})});
+  if(!r.ok){ toast(esc(r.error||"")); return; }
+  dom("w-result").innerHTML=""; loadWmi();
+};
+$("#w-cancel").onclick=async()=>{
+  await api("/api/wmitrace",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"cancel"})});
+};
 
 /* ═══════════ ТЕМПЕРАТУРИ ═══════════ */
 /* Живуть одним компактним рядком під картками «Зараз»: окрема вкладка
@@ -2227,6 +2399,8 @@ function renderHealth(d){
         ${(r.items||[]).map(it=>`<div class="hitem s-${it.status||"info"}"${it.enabled===false?' style="opacity:.55"':""}>
             <span class="hdot"></span><div style="flex:1"><b>${esc(it.name)}</b>
             <span class="muted"> — ${esc(it.text||"")}</span></div>
+            ${it.ignorable&&it.source?`<button class="btn small" data-src="${esc(it.source)}" data-on="${it.ignored?"0":"1"}"
+                onclick="healthIgnore(this)" title="Не рахувати це джерело в оцінці здоров'я">${it.ignored?"Рахувати знову":"Ігнорувати"}</button>`:""}
             ${it.sid?(it.can===false
               ?`<span class="muted" style="font-size:11px;white-space:nowrap"
                   title="Запис «для всіх» — потрібні права адміністратора">потрібен адмін</span>`
@@ -2261,6 +2435,17 @@ document.addEventListener("click",e=>{
   const b=e.target.closest&&e.target.closest(".hsw");
   if(b) hStartupToggle(b);
 });
+
+async function healthIgnore(btn){
+  const src=btn.dataset.src, on=btn.dataset.on==="1";
+  btn.disabled=true;
+  let r; try{ r=await api("/api/health_ignore",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({source:src,on})}); }
+  catch(e){ btn.disabled=false; toast("Помилка: "+esc(e.message)); return; }
+  btn.disabled=false;
+  toast(on?`«${esc(src)}» більше не впливає на оцінку — зміниться після наступної перевірки`:`«${esc(src)}» знову рахується`);
+  btn.dataset.on=on?"0":"1"; btn.textContent=t(on?"Рахувати знову":"Ігнорувати");
+}
+window.healthIgnore=healthIgnore;
 
 async function startHealth(mode){
   try{
@@ -2453,15 +2638,34 @@ async function checkClipboard(){
   let head;
   if(d.hung||d.blocker){
     const b=d.blocker||{};
+    // Відомі винуватці: коли ім'я впізнане, кажемо не лише «хтось тримає»,
+    // а що це за вада і чи безпечно завершувати процес.
+    const KNOWN={
+      "snippingtool.exe":"Відома вада Windows 11: «Ножиці» іноді не відпускають "
+        +"буфер після скріншота з розпізнаванням тексту. Завершити процес "
+        +"безпечно — він сам запуститься знову на Win+Shift+S.",
+      "powertoys.exe":"Історія буфера в PowerToys інколи тримає його на собі. "
+        +"Якщо повторюється — вимкни модуль «Clipboard History» у PowerToys.",
+      "explorer.exe":"Провідник тримає буфер під час копіювання файлів. "
+        +"Дочекайся кінця копіювання — завершувати explorer.exe не варто.",
+      "teamviewer.exe":"TeamViewer передає буфер віддаленій стороні й тримає "
+        +"його на час передачі. Під час активного сеансу це нормально.",
+      "msrdc.exe":"Віддалений робочий стіл / WSLg синхронізує буфер із "
+        +"віддаленою машиною. Закрий сеанс — і буфер звільниться.",
+    };
+    const hint=KNOWN[(b.name||"").toLowerCase()];
     head=`<b>Буфер тримає інша програма</b>
       ${esc(b.name||"невідома програма")}${b.pid?` (PID ${b.pid})`:""}${
       b.title?` — вікно «${esc(b.title)}»`:
       (b.background?' — <b>працює у фоні, вікна немає</b>':"")}.
       Поки вона його не відпустить, копіювання й вставка не працюватимуть ні в чому.
+      ${hint?`<div style="margin-top:8px;font-size:12.5px;opacity:.9">${esc(hint)}</div>`:""}
       ${b.pid?`<div style="margin-top:10px;display:flex;gap:8px">
         <button class="btn small" onclick="killProc(${b.pid},'${esc(b.name||"")}')">✕ Завершити процес</button>
         <button class="btn small" onclick="openProc('${esc(b.name||"")}')">Деталі</button>
-      </div>`:""}`;
+      </div>
+      <div class="muted" style="font-size:11.5px;margin-top:6px">Вміст буфера при
+        цьому може зникнути — програма іноді віддає дані «на вимогу».</div>`:""}`;
   } else if(worst>=200){
     head=`<b>Дуже повільний доступ</b>Звернення до буфера триває до ${worst.toFixed(0)} мс —
       це і є та затримка, яку ти відчуваєш.`;
@@ -2716,6 +2920,43 @@ async function loadSettings(){
         <div class="ctl"><button class="btn small" onclick="doRestart()">⟳ Перезапустити</button></div></div>
     </div>
 
+    <div class="panel cfg-sec"><h2>Сповіщення</h2>
+      <div class="cfg-row"><div class="lbl"><b>Сповіщення з трея</b>
+        <span>Монітор сам попереджає про важливе — стандартним сповіщенням Windows,
+        поки вікно закрите. Усе показане лишається у стрічці «Події».
+        ${d.notify_opts&&d.notify_opts.enabled===false?"":""}</span></div>
+        <div class="ctl">${swHtml("sw-n-enabled",(d.notify_opts||{}).enabled!==false)}
+          <button class="btn small" style="margin-left:8px" onclick="notifyTest()">Тест</button></div></div>
+      ${[["new_net","Нова програма вперше в мережі","exe з'явився менш ніж добу тому і вже щось надсилає"],
+         ["suspicious","Поріг підозрілості","програма набрала бали вище порога"],
+         ["busy_loop","Порожній цикл","рівно одне ядро 30+ хвилин при малій пам'яті — busy-wait"],
+         ["memory","Оперативна пам'ять","зайнято понад поріг три заміри поспіль, з назвою винуватця"],
+         ["disk","Диски","диск майже повний або за трендом заповниться за кілька днів"],
+         ["temp","Температура","відеокарта чи накопичувач вище порога"],
+         ["autostart","Автозапуск","з'явився новий запис, якого вчора не було"],
+         ["watch","Стеження","запустилась програма зі списку «Стежити»"],
+        ].map(([k,t,d2])=>`<div class="cfg-row"><div class="lbl"><b>${t}</b><span>${d2}</span></div>
+          <div class="ctl">${swHtml("sw-n-"+k,(d.notify_opts||{})[k]!==false)}</div></div>`).join("")}
+      <div class="cfg-row"><div class="lbl"><b>Тихі години</b>
+        <span>У цей проміжок нічого не спливає — лише пишеться в «Події»</span></div>
+        <div class="ctl">з <input type="number" id="i-n-qf" min="0" max="23" style="width:64px" value="${(d.notify_opts||{}).quiet_from??23}">
+          до <input type="number" id="i-n-qt" min="0" max="23" style="width:64px" value="${(d.notify_opts||{}).quiet_to??8}"> <span class="muted">год</span></div></div>
+      <div class="cfg-row"><div class="lbl"><b>Пороги</b>
+        <span>Пам'ять, % · GPU, °C · диски, °C · диск заповниться за N днів</span></div>
+        <div class="ctl">
+          <input type="number" id="i-n-ram" min="50" max="99" style="width:64px" value="${(d.notify_opts||{}).ram_pct??90}">
+          <input type="number" id="i-n-gpu" min="50" max="110" style="width:64px" value="${(d.notify_opts||{}).gpu_temp_c??85}">
+          <input type="number" id="i-n-dsk" min="35" max="90" style="width:64px" value="${(d.notify_opts||{}).disk_temp_c??60}">
+          <input type="number" id="i-n-days" min="1" max="60" style="width:64px" value="${(d.notify_opts||{}).disk_days??7}"></div></div>
+      <div class="cfg-row"><div class="lbl"><b>Живий значок у треї</b>
+        <span>Стовпчики CPU і RAM на значку замість логотипа, оновлення раз на 5 с</span></div>
+        <div class="ctl">${swHtml("sw-traylive",c.tray_live!==false)}</div></div>
+      <div class="cfg-row"><div class="lbl"><b>Гаряча клавіша вікна</b>
+        <span>Показати вікно з будь-якого місця. ${d.hotkey&&d.hotkey.ok?"Зараз активна":(d.hotkey&&d.hotkey.error?"Не працює: "+esc(d.hotkey.error):"Застосується після перезапуску")}</span></div>
+        <div class="ctl"><input type="text" id="i-hotkey" style="width:150px" value="${esc(c.hotkey||"")}" placeholder="ctrl+shift+m"></div></div>
+      ${d.notify_history&&d.notify_history.length?`<div class="muted" style="font-size:12px;margin-top:6px">Останні: ${d.notify_history.slice(-3).map(h=>esc(h.title)).join(" · ")}</div>`:""}
+    </div>
+
     <div class="panel cfg-sec"><h2>Збір даних</h2>
       <div class="cfg-row"><div class="lbl"><b>Як часто опитувати процеси</b>
         <span>Менше значення — детальніша картина, але більше навантаження.
@@ -2810,6 +3051,11 @@ async function loadSettings(){
       <div class="cfg-row"><div class="lbl"><b>Денні підсумки та події</b>
         <span>Зберігаються значно довше, бо займають мало місця</span></div>
         <div class="ctl"><input type="number" id="i-rday" min="1" max="3650" value="${c.retention_days}"> <span class="muted">дн.</span></div></div>
+      <div class="cfg-row"><div class="lbl"><b>З'єднання та запуски процесів</b>
+        <span>Найбільші таблиці: браузер дає тисячі адрес і ~2000 запусків на день.
+        Скорочення цього строку — головний важіль розміру бази. Раз на місяць база
+        сама стискається.</span></div>
+        <div class="ctl"><input type="number" id="i-rconn" min="1" max="3650" value="${c.retention_conn_days??60}"> <span class="muted">дн.</span></div></div>
       <div class="cfg-row"><div class="lbl"><b>База даних</b>
         <span>${fb(d.db_size)} · ${EN?"collected over":"зібрано за"} ${d.days_collected} ${daysWord(d.days_collected)}</span></div>
         <div class="ctl"><button class="btn small" onclick="doVacuum()">Стиснути</button>
@@ -2878,7 +3124,18 @@ async function loadSettings(){
   t("sw-adm","run_as_admin");
   t("sw-ghupd","github_updates"); t("sw-ghauto","auto_install_updates");
   t("sw-etw","etw_enabled"); t("sw-gpu","gpu_enabled");
-  t("sw-deep","card_deep");
+  t("sw-deep","card_deep"); t("sw-traylive","tray_live");
+  // сповіщення — вкладений словник cfg.notify
+  const tn=(id,key)=>{ const el=$("#"+id); if(!el) return;
+    el.onclick=()=>{ const on=!el.classList.contains("on"); el.classList.toggle("on",on);
+      saveCfg({notify:{[key]:on}}); }; };
+  tn("sw-n-enabled","enabled");
+  ["new_net","suspicious","busy_loop","memory","disk","temp","autostart","watch"].forEach(k=>tn("sw-n-"+k,k));
+  const bn=(id,key)=>{ const el=$("#"+id); if(!el) return;
+    el.onchange=()=>saveCfg({notify:{[key]:+el.value}}); };
+  bn("i-n-qf","quiet_from"); bn("i-n-qt","quiet_to"); bn("i-n-ram","ram_pct");
+  bn("i-n-gpu","gpu_temp_c"); bn("i-n-dsk","disk_temp_c"); bn("i-n-days","disk_days");
+  const hk=$("#i-hotkey"); if(hk) hk.onchange=()=>{ saveCfg({hotkey:hk.value.trim()}); state.needsRestart=true; };
   t("sw-cmd","log_cmdline"); t("sw-sig","sig_check"); t("sw-hash","hash_new_exes");
   // вмикання командного рядка одразу перемальовує розділ, щоб з'явилось поле
   const swc=$("#sw-cmds");
@@ -2897,6 +3154,7 @@ async function loadSettings(){
     el.onchange=()=>saveCfg({[key]:num?+el.value:el.value}); };
   bind("i-sample","sample_interval",1); bind("i-mem","memory_metric",0);
   bind("i-rmin","retention_minutes_days",1); bind("i-rday","retention_days",1);
+  bind("i-rconn","retention_conn_days",1);
   const sp=$("#i-susp");
   if(sp) sp.onchange=()=>saveCfg({suspicion:{suspicion_min_score:+sp.value}});
   // розділ перемальовано — повертаємо на місце результати, які людина
@@ -3025,6 +3283,13 @@ async function elevateNow(){
   },2000);
 }
 window.elevateNow=elevateNow;
+
+async function notifyTest(){
+  let r; try{ r=await api("/api/notify_test",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"}); }
+  catch(e){ toast("Помилка: "+esc(e.message)); return; }
+  toast(r.ok?"✓ Сповіщення надіслано — подивись у кут екрана":"Не вдалося: "+esc(r.error||"трей недоступний"));
+}
+window.notifyTest=notifyTest;
 
 /* ═══════════ ОНОВЛЕННЯ ═══════════ */
 async function checkUpdate(){
@@ -3172,7 +3437,7 @@ function setTab(t){
   const hist = (t==="day"||t==="sec"||t==="ev");
   $("#daysel").style.display = hist ? "" : "none";
   $("#live").style.display   = hist ? "" : "none";
-  $("#search").style.display = (t==="cfg"||t==="health"||t==="auto") ? "none" : "";
+  $("#search").style.display = (t==="cfg") ? "none" : "";
   // Налаштування завантажуємо при ПЕРЕХОДІ на вкладку, але не у фоновому
   // циклі: там вони нічого не оновлювали б, зате стирали б результати
   // перевірок і набраний у терміналі текст.
@@ -3205,7 +3470,14 @@ async function refreshAll(){
 }
 $("#daysel").onchange=e=>{ state.date=e.target.value; state.open=null; refreshAll(); };
 $("#search").oninput=e=>{ state.search=e.target.value.trim().toLowerCase();
-  renderApps(); renderEvents(); };
+  renderApps(); renderEvents(); filterTabText(); };
+// Пошук на «Здоров'я» та «Автозапуск»: просто ховаємо рядки без збігу —
+// дані там рендеряться цілком, фільтрувати на боці сервера немає сенсу.
+function filterTabText(){
+  const s=state.search;
+  document.querySelectorAll("#h-results .hitem, #a-apps .arow, #a-svc .arow").forEach(el=>{
+    el.style.display=(!s||el.textContent.toLowerCase().includes(s))?"":"none"; });
+}
 $("#ev-filter").onchange=e=>{ state.evFilter=e.target.value; renderEvents(); };
 $("#live").onclick=()=>{ state.live=!state.live;
   $("#live").classList.toggle("active",state.live); };

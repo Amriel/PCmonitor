@@ -148,10 +148,21 @@ class EtwNet:
                        capture_output=True, timeout=10)
 
     def stop(self):
-        if self.job is not None:
-            try:
-                self.job.stop()
-            except Exception:
-                pass
-            self.job = None
+        """
+        Зупинити сесію. pywintrace-івський job.stop() на практиці не
+        повертається (чекає на споживача трейсу), тому не покладаємось на
+        нього: даємо йому 2 с у фоновому потоці, а сесію ядра закриваємо
+        напряму через logman — це миттєво і гарантовано не лишає осиротілої
+        сесії, яка б далі жувала буфери після виходу монітора.
+        """
+        import threading
+        job, self.job = self.job, None
+        if job is not None:
+            th = threading.Thread(target=lambda: job.stop(), daemon=True)
+            th.start()
+            th.join(2)
+        try:
+            self._force_stop_session()
+        except Exception:
+            pass
         self.status = "зупинено"
