@@ -20,6 +20,7 @@ PC Monitor — власний монітор ресурсів комп'ютер�
          python monitor.py --export chrome.exe   — CLI-експорт звіту по апці
 """
 import argparse
+import glob
 import hashlib
 import itertools
 import json
@@ -55,7 +56,8 @@ sys.path.insert(0, BASE)
 import psutil  # noqa: E402
 import suspicion  # noqa: E402
 
-VERSION = "1.4.0"
+VERSION = "1.4.3"
+START_MONO = time.monotonic()      # для «не чіпати базу в перші секунди»
 IS_WIN = sys.platform == "win32"
 GITHUB_REPO = "Amriel/PCmonitor"   # звідки апка бере нові релізи
 
@@ -557,6 +559,7 @@ CREATE TABLE IF NOT EXISTS app_minute(
   minute_ts INTEGER, name TEXT, exe TEXT, cpu_pct_avg REAL, cpu_pct_max REAL, cpu_core_s REAL,
   rss_max INTEGER, read_b INTEGER, write_b INTEGER, nproc INTEGER,
   cores_max REAL DEFAULT 0,
+  mins INTEGER DEFAULT 1,          -- скільки тихих хвилин згорнуто в цей рядок
   PRIMARY KEY(minute_ts, name));
 CREATE INDEX IF NOT EXISTS ix_am_name ON app_minute(name, minute_ts);
 CREATE TABLE IF NOT EXISTS sys_minute(
@@ -707,6 +710,7 @@ def migrate_db(con):
     # найкорисніше: «Maxon Computer» і «невідомо хто» — зовсім різні новини.
     for table, col, decl in (
         ("app_minute", "cores_max", "REAL DEFAULT 0"),
+        ("app_minute", "mins", "INTEGER DEFAULT 1"),
         ("app_day", "cores_max", "REAL DEFAULT 0"),
         ("sys_minute", "core_max", "REAL DEFAULT 0"),
         ("exe_info", "sig_signer", "TEXT"),
@@ -884,6 +888,17 @@ class Writer(threading.Thread):
         self.con = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
         self.con.execute("PRAGMA journal_mode=WAL")
         self.con.execute("PRAGMA synchronous=NORMAL")
+        # День останнього обслуговування пам'ятаємо в базі, а не лише в
+        # пам'яті: інакше кожен перезапуск монітора знову проганяв ретенцію
+        # по всіх таблицях (на 187-мегабайтній базі це 30 секунд важких
+        # DELETE одразу після старту — саме через це апка «довго думала»).
+        try:
+            r = self.con.execute(
+                "SELECT v FROM meta WHERE k='last_maint_day'").fetchone()
+            if r:
+                self.last_retention_day = r[0]
+        except Exception:
+            pass
         self.replay_unsaved()
         while not self.finish.is_set():
             self.finish.wait(self.cfg["flush_interval"])
@@ -930,8 +945,14 @@ class Writer(threading.Thread):
         today = human_day()
         if self.last_retention_day == today:
             return
+        # Не в перші секунди після запуску: там і так найбільше роботи
+        # (перший обхід процесів, підписи, вікно), а ретенція б'ється з
+        # ними за ту саму базу.
+        if time.monotonic() - START_MONO < 90:
+            return
         self.last_retention_day = today
         try:
+            t_maint = time.monotonic()
             yesterday = human_day(time.time() - 86400)
             self.rollup_day(yesterday)
             now = int(time.time())
@@ -942,18 +963,40 @@ class Writer(threading.Thread):
             # ~2000 запусків і тисячі адрес на день). Тримати їх рік, як денні
             # підсумки, немає сенсу — у них свій, коротший строк.
             cut_conn = now - int(self.cfg.get("retention_conn_days", 60)) * 86400
+            # Видаляємо порціями по 20 000 рядків, віддаючи блокування між
+            # порціями: один великий DELETE тримав базу зайнятою десятки
+            # секунд, і в цей час і збирач, і сторінка чекали.
+            plan = [
+                ("app_minute", "minute_ts < ?", (cut_min,)),
+                ("net_minute", "minute_ts < ?", (cut_min,)),
+                ("sys_minute", "minute_ts < ?", (cut_min,)),
+                ("watch_raw", "ts < ?", (cut_raw,)),
+                ("events", "ts < ?", (cut_all,)),
+                # запуски/зупинки — найбільша частина events; тримаємо як з'єднання
+                ("events", "ts < ? AND kind IN ('process_start','process_stop')",
+                 (cut_conn,)),
+                ("net_conn", "last_ts < ?", (cut_conn,)),
+                ("dns_seen", "last_ts < ?", (cut_all,)),
+                ("proc_instances", "started_ts < ?", (cut_conn,)),
+                ("disk_free", "day < date('now', '-400 days')", ()),
+                ("app_day", f"day < date('now', '-{int(self.cfg['retention_days'])} days')", ()),
+            ]
+            removed = 0
+            for table, where, args in plan:
+                while not self.finish.is_set():
+                    with self.flock, self.con:
+                        cur = self.con.execute(
+                            f"DELETE FROM {table} WHERE rowid IN "
+                            f"(SELECT rowid FROM {table} WHERE {where} LIMIT 20000)", args)
+                    removed += cur.rowcount
+                    if cur.rowcount < 20000:
+                        break
+                    time.sleep(0.05)          # дати іншим попрацювати
             with self.flock, self.con:
-                self.con.execute("DELETE FROM app_minute WHERE minute_ts < ?", (cut_min,))
-                self.con.execute("DELETE FROM net_minute WHERE minute_ts < ?", (cut_min,))
-                self.con.execute("DELETE FROM sys_minute WHERE minute_ts < ?", (cut_min,))
-                self.con.execute("DELETE FROM watch_raw WHERE ts < ?", (cut_raw,))
-                self.con.execute("DELETE FROM events WHERE ts < ?", (cut_all,))
-                self.con.execute("DELETE FROM net_conn WHERE last_ts < ?", (cut_conn,))
-                self.con.execute("DELETE FROM dns_seen WHERE last_ts < ?", (cut_all,))
-                self.con.execute("DELETE FROM proc_instances WHERE started_ts < ?", (cut_conn,))
-                self.con.execute("DELETE FROM app_day WHERE day < date('now', ?)",
-                                 (f"-{self.cfg['retention_days']} days",))
-            log.info("Обслуговування БД виконано (ретенція, підсумок за %s)", yesterday)
+                self.con.execute(
+                    "INSERT OR REPLACE INTO meta(k,v) VALUES('last_maint_day',?)", (today,))
+            log.info("Обслуговування БД виконано за %.1f с (видалено %d рядків, "
+                     "підсумок за %s)", time.monotonic() - t_maint, removed, yesterday)
             self._maybe_vacuum()
         except Exception:
             log.exception("Помилка обслуговування БД")
@@ -1050,6 +1093,11 @@ class Writer(threading.Thread):
         його не читав, тож урятоване тут же осиротіло.
         """
         path = os.path.join(LOG_DIR, "unsaved.jsonl")
+        for old in glob.glob(path + ".*.done"):     # хвости від 1.4.0
+            try:
+                os.remove(old)
+            except OSError:
+                pass
         if not os.path.exists(path):
             return
         done = 0
@@ -1062,7 +1110,7 @@ class Writer(threading.Thread):
                         done += 1
                     except Exception:
                         continue
-            os.replace(path, path + "." + time.strftime("%Y%m%d%H%M%S") + ".done")
+            os.remove(path)               # повернули — файл більше не потрібен
             log.info("Повернув у чергу %d незбережених операцій з минулої зупинки", done)
         except Exception:
             log.exception("Не вдалося повернути незбережені операції")
@@ -1110,7 +1158,7 @@ class Writer(threading.Thread):
                                      WHERE nm.name = am.name AND nm.minute_ts >= ? AND nm.minute_ts < ?), 0),
                            COALESCE((SELECT SUM(nm.recv_b) FROM net_minute nm
                                      WHERE nm.name = am.name AND nm.minute_ts >= ? AND nm.minute_ts < ?), 0),
-                           COUNT(*), MIN(am.minute_ts), MAX(am.minute_ts),
+                           SUM(COALESCE(am.mins,1)), MIN(am.minute_ts), MAX(am.minute_ts),
                            COALESCE((SELECT COUNT(*) FROM proc_instances pi
                                      WHERE pi.name = am.name AND pi.started_ts < ?
                                        AND COALESCE(pi.ended_ts, ?) >= ?), 0),
@@ -1279,6 +1327,16 @@ class Sampler(threading.Thread):
         self._temp_ts = 0             # коли востаннє дивились температури
         self._susp_ts = 0             # коли востаннє перевіряли підозрілість
         self._net_seen = set()        # імена, для яких мережу вже бачили
+        # Шторм подій: opera.exe дає 36 000 start/stop за 11 днів — у «Події»
+        # це шум, а в базі 13 МБ. Після EVENT_CAP запусків за день ім'я пише
+        # лише proc_instances (картка процесу бачить усе), події — ні.
+        self._ev_day = ""
+        self._ev_count = {}           # name → запусків сьогодні
+        # Тихі хвилини: служба з 0.2 с CPU за хвилину не варта рядка в
+        # app_minute щохвилини. Накопичуємо і скидаємо раз на 5 хв або коли
+        # хвилина стала активною — суми лишаються точними.
+        self._carry = {}              # name → накопичена тиха активність
+        self._net_carry = {}          # name → (sent, recv) дрібного трафіку
         self._susp_notified = set()
         # серцебиття збирача: коли востаннє закінчив цикл і що робить зараз.
         # Потрібне, щоб «збирач зайнятий» могло назвати, чим саме.
@@ -1655,7 +1713,8 @@ class Sampler(threading.Thread):
             self.writer.push(
                 "UPDATE proc_instances SET ended_ts=?, cpu_core_s=? "
                 "WHERE pid=? AND create_time=? AND ended_ts IS NULL", (its, cpu_s, pid, ct))
-            if self.first_tick_done:
+            if self.first_tick_done and (lname in self.watchset
+                                         or self._ev_count.get(lname, 0) <= self.EVENT_CAP):
                 self.writer.push(
                     "INSERT INTO events(ts,kind,name,exe,pid,info) VALUES(?,?,?,?,?,?)",
                     (its, "process_stop", lname, exe, pid,
@@ -1834,10 +1893,11 @@ class Sampler(threading.Thread):
                 "ON CONFLICT(exe) DO NOTHING", (exe, lname, its, size, mtime))
             self.inspector.submit(exe)
         if self.first_tick_done:
-            self.writer.push(
-                "INSERT INTO events(ts,kind,name,exe,pid,info) VALUES(?,?,?,?,?,?)",
-                (its, "process_start", lname, exe, pid,
-                 f"запущено{' (батько: ' + parent_name + ')' if parent_name else ''}"))
+            if self._event_ok(lname):
+                self.writer.push(
+                    "INSERT INTO events(ts,kind,name,exe,pid,info) VALUES(?,?,?,?,?,?)",
+                    (its, "process_start", lname, exe, pid,
+                     f"запущено{' (батько: ' + parent_name + ')' if parent_name else ''}"))
             # програма зі списку стеження запустилась — це і є «пастка»
             if self.notifier is not None and lname in self.watchset:
                 try:
@@ -1879,6 +1939,9 @@ class Sampler(threading.Thread):
         # 2. Порожній цикл: одне ядро з'їдене рівно, пам'ять мала, диск і
         #    мережа мовчать — це не робота, а busy-wait. Рахуємо час у такому
         #    стані; 30 хвилин поспіль → сповіщення (раз на день на програму).
+        alive = {a["name"] for a in live_apps}
+        for nm in [k for k, v in self._busy.items() if k not in alive and v["s"] <= 0]:
+            del self._busy[nm]          # словник не росте з кожною програмою, що була
         for a in live_apps:
             busy = (0.85 <= a["cores1"] <= 1.25 and a["rss"] < 400 * 2**20
                     and a["disk_bps"] < 200 * 1024 and a["net_bps"] < 50 * 1024)
@@ -1911,39 +1974,71 @@ class Sampler(threading.Thread):
                          f"{lname} з'явилась сьогодні і вже щось надсилає. "
                          f"Файл: {r.get('exe') or '?'}", key=f"newnet:{lname}")
 
-        # 4. Температура — раз на хвилину, з даних, які й так кешуються.
-        if its - self._temp_ts >= 60:
+        # 4. Температура — раз на 2 хв і ЛИШЕ коли цей вид сповіщень увімкнено:
+        #    датчики дисків ідуть через PowerShell/WMI, дарма їх не смикаємо.
+        if (its - self._temp_ts >= 120 and o.get("enabled", True)
+                and o.get("temp", True)):
             self._temp_ts = its
-            try:
-                import sensors as _s
-                d = _s.read_all()
-                for g in (d.get("gpus") or []):
-                    if g.get("temp") is not None and g["temp"] >= float(o.get("gpu_temp_c", 85)):
-                        n.notify("temp", "Відеокарта перегрівається",
-                                 f"{g.get('name') or 'GPU'}: {g['temp']} °C"
-                                 + (f", вентилятор {g['fan']}%" if g.get("fan") is not None else ""),
-                                 key="temp:gpu")
-                for x in (d.get("disks") or []):
-                    if x.get("temp") is not None and x["temp"] >= float(o.get("disk_temp_c", 60)):
-                        n.notify("temp", "Накопичувач гарячий",
-                                 f"{x.get('name')}: {x['temp']} °C", key=f"temp:{x.get('name')}")
-            except Exception:
-                pass
+
+            def _temp_pass():
+                # диски читаються через PowerShell (секунди) — не в циклі збору
+                try:
+                    import sensors as _s
+                    d = _s.read_all()
+                    for g in (d.get("gpus") or []):
+                        if g.get("temp") is not None and g["temp"] >= float(o.get("gpu_temp_c", 85)):
+                            n.notify("temp", "Відеокарта перегрівається",
+                                     f"{g.get('name') or 'GPU'}: {g['temp']} °C"
+                                     + (f", вентилятор {g['fan']}%" if g.get("fan") is not None else ""),
+                                     key="temp:gpu")
+                    for x in (d.get("disks") or []):
+                        if x.get("temp") is not None and x["temp"] >= float(o.get("disk_temp_c", 60)):
+                            n.notify("temp", "Накопичувач гарячий",
+                                     f"{x.get('name')}: {x['temp']} °C", key=f"temp:{x.get('name')}")
+                except Exception:
+                    pass
+            threading.Thread(target=_temp_pass, name="temp-pass", daemon=True).start()
 
         # 5. Підозрілість — раз на 5 хвилин через зведення дня (воно кешоване).
-        if its - self._susp_ts >= 300:
+        if (its - self._susp_ts >= 300 and o.get("enabled", True)
+                and o.get("suspicious", True)):
             self._susp_ts = its
-            try:
-                d = build_day(self.cfg, human_day())
-                for a in d["apps"]:
-                    if a.get("suspicious") and a["name"] not in self._susp_notified:
-                        self._susp_notified.add(a["name"])
-                        why = (a.get("suspicion_reasons") or [""])[0]
-                        n.notify("suspicious", "Програма набрала поріг підозрілості",
-                                 f"{a['name']} — {a['suspicion_score']} балів. {why}",
-                                 key=f"susp:{a['name']}")
-            except Exception:
-                pass
+
+            def _susp_pass():
+                # build_day — сотні мс на повному дні; не тримаємо ним цикл збору
+                try:
+                    d = build_day(self.cfg, human_day())
+                    for a in d["apps"]:
+                        if a.get("suspicious") and a["name"] not in self._susp_notified:
+                            self._susp_notified.add(a["name"])
+                            why = (a.get("suspicion_reasons") or [""])[0]
+                            n.notify("suspicious", "Програма набрала поріг підозрілості",
+                                     f"{a['name']} — {a['suspicion_score']} балів. {why}",
+                                     key=f"susp:{a['name']}")
+                except Exception:
+                    pass
+            threading.Thread(target=_susp_pass, name="susp-pass", daemon=True).start()
+
+    EVENT_CAP = 20          # start/stop-подій на ім'я за день
+    QUIET_CORE_S = 0.6      # <1 % ядра за хвилину
+    QUIET_IO_B = 256 * 1024
+    NET_TINY_B = 1024
+
+    def _event_ok(self, lname):
+        """Чи ще писати process_start/stop у events для цього імені сьогодні."""
+        day = human_day()
+        if day != self._ev_day:
+            self._ev_day, self._ev_count = day, {}
+        if lname in self.watchset:
+            return True
+        c = self._ev_count.get(lname, 0) + 1
+        self._ev_count[lname] = c
+        if c == self.EVENT_CAP + 1:
+            self.writer.push(
+                "INSERT INTO events(ts,kind,name,exe,pid,info) VALUES(?,?,?,?,?,?)",
+                (int(time.time()), "process_start", lname, "", 0,
+                 f"понад {self.EVENT_CAP} запусків за день — далі лише в картці процесу"))
+        return c <= self.EVENT_CAP
 
     def finalize_minute(self):
         if self.minute_idx is None:
@@ -1959,12 +2054,26 @@ class Sampler(threading.Thread):
             e = net_by_name.setdefault(nm, [0, 0])
             e[0] += sent
             e[1] += recv
+        flush_slot = (self.minute_idx % 5 == 4)
         for nm, (sent, recv) in net_by_name.items():
+            c = self._net_carry.pop(nm, (0, 0))
+            sent += c[0]; recv += c[1]
+            if sent + recv < self.NET_TINY_B and not flush_slot:
+                self._net_carry[nm] = (sent, recv)      # keep-alive по кілька байтів
+                continue
             rows.append((
                 "INSERT INTO net_minute(minute_ts,name,sent_b,recv_b) VALUES(?,?,?,?) "
                 "ON CONFLICT(minute_ts,name) DO UPDATE SET "
                 "sent_b=sent_b+excluded.sent_b, recv_b=recv_b+excluded.recv_b",
                 (m_ts, nm, sent, recv)))
+        if flush_slot:
+            for nm, (sent, recv) in self._net_carry.items():
+                rows.append((
+                    "INSERT INTO net_minute(minute_ts,name,sent_b,recv_b) VALUES(?,?,?,?) "
+                    "ON CONFLICT(minute_ts,name) DO UPDATE SET "
+                    "sent_b=sent_b+excluded.sent_b, recv_b=recv_b+excluded.recv_b",
+                    (m_ts, nm, sent, recv)))
+            self._net_carry = {}
 
         # DNS
         with self.dns_lock:
@@ -2000,14 +2109,44 @@ class Sampler(threading.Thread):
                       or net_e is not None or lname in watched)
             if not active:
                 continue
-            avg_pct = min(100.0, a["core_s"] / 60.0 / self.ncpu * 100.0)
+            a["mins"] = 1
+            c = self._carry.pop(lname, None)
+            if c:                                   # долити тихі хвилини
+                a["core_s"] += c["core_s"]; a["read_b"] += c["read_b"]
+                a["write_b"] += c["write_b"]
+                a["rss_max"] = max(a["rss_max"], c["rss_max"])
+                a["pct_max"] = max(a["pct_max"], c["pct_max"])
+                a["cores_max"] = max(a.get("cores_max", 0.0), c["cores_max"])
+                a["mins"] += c.get("mins", 1)
+            quiet = (a["core_s"] < self.QUIET_CORE_S
+                     and a["read_b"] + a["write_b"] < self.QUIET_IO_B
+                     and net_e is None and lname not in watched)
+            if quiet and not flush_slot:
+                self._carry[lname] = a
+                continue
+            # у згорнутому рядку core_s — сума за mins хвилин, тож середній
+            # відсоток ділимо на mins: графік «CPU по хвилинах» лишається чесним
+            avg_pct = min(100.0, a["core_s"] / (60.0 * a["mins"]) / self.ncpu * 100.0)
             rows.append((
                 "INSERT OR REPLACE INTO app_minute(minute_ts,name,exe,cpu_pct_avg,cpu_pct_max,"
-                "cpu_core_s,rss_max,read_b,write_b,nproc,cores_max) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "cpu_core_s,rss_max,read_b,write_b,nproc,cores_max,mins) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (m_ts, lname, a["exe"], round(avg_pct, 2), round(a["pct_max"], 2),
                  round(a["core_s"], 3), a["rss_max"], a["read_b"], a["write_b"], a["nproc"],
-                 round(a.get("cores_max", 0.0), 2))))
+                 round(a.get("cores_max", 0.0), 2), a.get("mins", 1))))
+
+        if flush_slot and self._carry:
+            for lname, a in self._carry.items():
+                avg_pct = min(100.0, a["core_s"] / (60.0 * a.get("mins", 1))
+                              / self.ncpu * 100.0)
+                rows.append((
+                    "INSERT OR REPLACE INTO app_minute(minute_ts,name,exe,cpu_pct_avg,cpu_pct_max,"
+                    "cpu_core_s,rss_max,read_b,write_b,nproc,cores_max,mins) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (m_ts, lname, a["exe"], round(avg_pct, 2), round(a["pct_max"], 2),
+                     round(a["core_s"], 3), a["rss_max"], a["read_b"], a["write_b"], a["nproc"],
+                     round(a.get("cores_max", 0.0), 2), a.get("mins", 1))))
+            self._carry = {}
 
         # системна хвилина
         s, self.sys_acc = self.sys_acc, None
@@ -2090,7 +2229,7 @@ def build_day(cfg, date, sampler=None):
 
     am = q("""SELECT name, MAX(exe) exe, SUM(cpu_core_s) cpu_core_s, MAX(cpu_pct_max) cpu_pct_max,
                      MAX(rss_max) rss_max, SUM(read_b) read_b, SUM(write_b) write_b,
-                     COUNT(*) nmin, MIN(minute_ts) first_ts, MAX(minute_ts) last_ts,
+                     SUM(COALESCE(mins,1)) nmin, MIN(minute_ts) first_ts, MAX(minute_ts) last_ts,
                      MAX(COALESCE(cores_max,0)) cores_max
               FROM app_minute WHERE minute_ts >= ? AND minute_ts < ? GROUP BY name""", (t0, t1))
     minutes_available = bool(am)
@@ -3547,6 +3686,22 @@ def make_handler(ctx: Ctx):
                     # в момент, коли буфер гальмує
                     try:
                         import clipboard_win
+                        if qs.get("who") == "1":
+                            # Найдешевший режим: ЛИШЕ спитати вікно-власника,
+                            # нічого не відкриваючи. Не може зависнути навіть
+                            # тоді, коли буфер намертво тримають, — саме для
+                            # такого випадку сторінка його й викликає.
+                            hold = None
+                            try:
+                                ct, wt, u, _k = clipboard_win._win()
+                                hwnd = u.GetOpenClipboardWindow() or u.GetClipboardOwner()
+                                hold = (clipboard_win._proc_of_hwnd(u, ct, wt, hwnd)
+                                        if hwnd else None)
+                            except Exception:
+                                pass
+                            self._json({"supported": IS_WIN, "who": True,
+                                        "blocker": hold})
+                            return
                         # ОДИН виклик diagnose замість двох: кожен звертається
                         # до буфера, а зайві звернення самі стають навантаженням
                         want_sizes = qs.get("sizes") == "1"
@@ -4500,7 +4655,11 @@ def run_collector(cfg, with_tray=True, console=False):
         try:
             from etw_net import EtwNet
             etw = EtwNet(on_bytes=sampler.on_etw_bytes, on_dns=sampler.on_etw_dns)
-            etw.start()
+            # Старт ETW-сесії (імпорт pywintrace + реєстрація провайдерів)
+            # займає секунди й нічого не віддає одразу — робимо це фоном,
+            # щоб вікно й показники не чекали на нього. Перші секунди
+            # мережа буде без точних байтів, далі — як завжди.
+            threading.Thread(target=etw.start, name="etw-start", daemon=True).start()
         except Exception as e:
             log.warning("ETW-модуль не завантажився: %s", e)
 

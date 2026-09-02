@@ -51,6 +51,16 @@
   <div class="row"><label>Порт монітора</label>
     <input id="port" placeholder="8787"></div>
 
+  <div class="row"><label>Оновлювати</label>
+    <select id="interval">
+      <option value="1">раз на секунду</option>
+      <option value="2">раз на 2 секунди</option>
+      <option value="5">раз на 5 секунд</option>
+    </select></div>
+  <div class="hint">Кожне оновлення — це перемальовування клавіші й запис
+    картинки на пристрій. Дві секунди виглядають так само живо, але
+    коштують удвічі менше процесора Stream Deck.</div>
+
   <div class="row"><label>Мова / Language</label>
     <select id="lang">
       <option value="uk">Українська</option>
@@ -90,6 +100,7 @@ function fill() {
   $("metric").value    = settings.metric || "cpu";
   $("label").value     = settings.label  || "";
   $("lang").value      = settings.lang   || "uk";
+  $("interval").value  = settings.interval || "2";
   $("warn").value      = settings.warn   != null ? settings.warn : "";
   $("port").value      = settings.port   || "8787";
   $("vram_show").value = settings.vram_show || "used";
@@ -102,6 +113,7 @@ function save() {
     metric: $("metric").value,
     label:  $("label").value.trim(),
     lang:   $("lang").value,
+    interval: +$("interval").value || 2,
     warn:   $("warn").value === "" ? null : +$("warn").value,
     port:   $("port").value.trim() || "8787",
     vram_show: $("vram_show").value,
@@ -111,7 +123,8 @@ function save() {
   toggleRows();
   check();
 }
-["metric", "label", "warn", "port", "vram_show", "tempwarn", "lang"].forEach(id => {
+["metric", "label", "warn", "port", "vram_show", "tempwarn", "lang",
+ "interval"].forEach(id => {
   $(id).addEventListener("change", save);
 });
 

@@ -156,7 +156,9 @@ open.
 - **🚀 Startup manager** — what launches with Windows, toggled through the
   same official mechanism Task Manager uses.
 - **Stream Deck** — a native plugin: metrics with mini-charts right on the
-  keys (Settings → "Install plugin").
+  keys (Settings → "Install plugin"). Refresh rate is per key (1/2/5 s,
+  2 s by default) and a key is only redrawn when its picture actually
+  changes — Stream Deck's own CPU cost is what a plugin pays for.
 - **🔔 Notifications** (1.4.0) — standard Windows toasts from the tray while
   the window is closed: a new program talking to the network, a suspicion
   threshold crossed, a *busy loop* (one core burned for 30+ minutes by a
@@ -212,7 +214,7 @@ installer into `updates\` yourself (build.bat does this for you).
 | `hash_new_exes` | SHA-256 new executables | true |
 | `log_cmdline` | log process command lines | false |
 | `suspicion.*` | heuristic thresholds | see file |
-| `retention_conn_days` | days of connection / process-launch history | 60 |
+| `retention_conn_days` | days of connection / process-launch and start/stop-event history | 60 |
 | `notify.*` | notification switches, quiet hours, thresholds | see Settings |
 | `tray_live` | CPU/RAM bars on the tray icon | true |
 | `hotkey` | global hotkey to show the window | ctrl+shift+m |

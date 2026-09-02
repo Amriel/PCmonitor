@@ -790,7 +790,8 @@ const _I18N_RX=(window.I18N_RX||[]).map(([p,r])=>{
   try{ return [new RegExp(p),r.replace(/\$(\d)/g,"$$$1")]; }catch(e){ return null; }
 }).filter(Boolean);
 // дрібні слова-статуси, які лишаються всередині вже перекладених шаблонів
-const _I18N_INLINE=[["активний","active"],["вимкнено в налаштуваннях","disabled in settings"],
+const _I18N_INLINE=[["працює у фоні, вікна немає","running in the background, no window"],
+  ["активний","active"],["вимкнено в налаштуваннях","disabled in settings"],
   ["вимкнено","disabled"],["недоступно: не Windows","unavailable: not Windows"],
   ["недоступно","unavailable"],["зупинено","stopped"],["немає","none"],["невідомо","unknown"],
   ["зараз:","now:"],["· зараз ","· now "],["порівняно з","compared with"]];
@@ -2586,6 +2587,36 @@ $("#l-stop").onclick=async()=>{
 };
 
 /* ═══════════ БУФЕР ОБМІНУ ═══════════ */
+// Відомі винуватці: коли ім'я впізнане, кажемо не лише «хтось тримає»,
+// а що це за вада і чи безпечно завершувати процес.
+const CLIP_KNOWN={
+  "snippingtool.exe":"Відома вада Windows 11: «Ножиці» іноді не відпускають "
+    +"буфер після скріншота з розпізнаванням тексту. Завершити процес "
+    +"безпечно — він сам запуститься знову на Win+Shift+S.",
+  "powertoys.exe":"Історія буфера в PowerToys інколи тримає його на собі. "
+    +"Якщо повторюється — вимкни модуль «Clipboard History» у PowerToys.",
+  "explorer.exe":"Провідник тримає буфер під час копіювання файлів. "
+    +"Дочекайся кінця копіювання — завершувати explorer.exe не варто.",
+  "teamviewer.exe":"TeamViewer передає буфер віддаленій стороні й тримає "
+    +"його на час передачі. Під час активного сеансу це нормально.",
+  "msrdc.exe":"Віддалений робочий стіл / WSLg синхронізує буфер із "
+    +"віддаленою машиною. Закрий сеанс — і буфер звільниться.",
+};
+// Хто тримає буфер — окремим найдешевшим запитом. Він не відкриває буфер,
+// тому відповідає навіть тоді, коли повна перевірка висить.
+function clipBlockerHtml(b){
+  if(!b||!b.pid) return "";
+  const hint=CLIP_KNOWN[(b.name||"").toLowerCase()];
+  return `<div style="margin-top:10px">Тримає його
+    <b>${esc(b.name||"невідома програма")}</b> (PID ${b.pid})${
+    b.title?` — вікно «${esc(b.title)}»`:
+    (b.background?" — працює у фоні, вікна немає":"")}.
+    ${hint?`<div style="margin-top:6px;font-size:12.5px;opacity:.9">${esc(hint)}</div>`:""}
+    <div style="margin-top:8px;display:flex;gap:8px">
+      <button class="btn small" onclick="killProc(${b.pid},'${esc(b.name||"")}')">✕ Завершити процес</button>
+      <button class="btn small" onclick="openProc('${esc(b.name||"")}')">Деталі</button>
+    </div></div>`;
+}
 async function checkClipboard(){
   $("#c-state").textContent="перевіряю…";
   $("#c-check").disabled=true;
@@ -2606,22 +2637,48 @@ async function checkClipboard(){
   catch(e){
     $("#c-state").textContent=""; $("#c-check").disabled=false;
     const busy = e.name==="AbortError" || /failed to fetch|network/i.test(e.message||"");
-    dom("c-result").innerHTML=`<div class="warnbox"><span>⚠</span><div>`+(busy
-      ? `<b>Буфер обміну зараз заблокований.</b> Перевірка не змогла до нього
-         достукатися — саме тому копіювання й гальмує. Це не помилка монітора,
-         це і є симптом. Зачекай кілька секунд і натисни ще раз; якщо повторюється
-         постійно — винуватець майже напевно у списку «стежать за буфером» нижче.`
-      : `Помилка: ${esc(e.message)}`)+`</div></div>`;
+    if(!busy){
+      dom("c-result").innerHTML=`<div class="warnbox"><span>⚠</span><div>
+        Помилка: ${esc(e.message)}</div></div>`;
+      return;
+    }
+    // Розрізняємо два зовсім різні випадки, які раніше зливались в один
+    // здогад: «монітор не відповідає» і «буфер справді тримають».
+    let alive=false;
+    try{ const p=await fetch("/api/ping",{cache:"no-store"}); alive=p.ok; }catch(_){}
+    if(!alive){
+      dom("c-result").innerHTML=`<div class="warnbox"><span>⚠</span><div>
+        <b>Монітор не відповідає.</b> Це не про буфер — збирач зараз
+        перезапускається або зайнятий. Перевірка повториться сама.</div></div>`;
+      setTimeout(checkClipboard, 4000);
+      return;
+    }
+    let who=null;
+    try{ who=await (await fetch("/api/clipboard?who=1",{cache:"no-store"})).json(); }catch(_){}
+    const b=(who||{}).blocker;
+    dom("c-result").innerHTML=`<div class="warnbox"><span>⚠</span><div>
+      <b>Буфер обміну зараз заблокований.</b> Повна перевірка не змогла його
+      відкрити — саме тому копіювання й гальмує. Це не помилка монітора, це і
+      є симптом.
+      ${b?clipBlockerHtml(b)
+         :`<div style="margin-top:8px">Хто саме тримає — Windows не називає:
+           буває, коли програма встигла закритись або тримає буфер без вікна.
+           Спробуй ще раз за кілька секунд; якщо повторюється — винуватець
+           майже напевно у списку «стежать за буфером» нижче.</div>`}
+      </div></div>`;
     return;
   }
   $("#c-state").textContent=""; $("#c-check").disabled=false;
   state.clipData=d;
   if(d.timed_out){
+    let b=d.blocker||null;
+    if(!b){ try{ b=(await (await fetch("/api/clipboard?who=1",
+             {cache:"no-store"})).json()).blocker; }catch(_){} }
     dom("c-result").innerHTML=`<div class="warnbox"><span>⚠</span><div>
       <b>Буфер не відповів за ${d.limit_s} с.</b>
-      ${d.holder?`Тримає його: <b>${esc(d.holder)}</b>.`:""}
       Це і є те гальмо, яке ти ловиш — перевірка впіймала його «на гарячому».
-      Спробуй ще раз через кілька секунд.</div></div>`;
+      ${b?clipBlockerHtml(b):(d.holder?`<div style="margin-top:8px">Тримає його:
+        <b>${esc(d.holder)}</b>.</div>`:"")}</div></div>`;
     return;
   }
   if(d.supported===false){
@@ -2638,22 +2695,7 @@ async function checkClipboard(){
   let head;
   if(d.hung||d.blocker){
     const b=d.blocker||{};
-    // Відомі винуватці: коли ім'я впізнане, кажемо не лише «хтось тримає»,
-    // а що це за вада і чи безпечно завершувати процес.
-    const KNOWN={
-      "snippingtool.exe":"Відома вада Windows 11: «Ножиці» іноді не відпускають "
-        +"буфер після скріншота з розпізнаванням тексту. Завершити процес "
-        +"безпечно — він сам запуститься знову на Win+Shift+S.",
-      "powertoys.exe":"Історія буфера в PowerToys інколи тримає його на собі. "
-        +"Якщо повторюється — вимкни модуль «Clipboard History» у PowerToys.",
-      "explorer.exe":"Провідник тримає буфер під час копіювання файлів. "
-        +"Дочекайся кінця копіювання — завершувати explorer.exe не варто.",
-      "teamviewer.exe":"TeamViewer передає буфер віддаленій стороні й тримає "
-        +"його на час передачі. Під час активного сеансу це нормально.",
-      "msrdc.exe":"Віддалений робочий стіл / WSLg синхронізує буфер із "
-        +"віддаленою машиною. Закрий сеанс — і буфер звільниться.",
-    };
-    const hint=KNOWN[(b.name||"").toLowerCase()];
+    const hint=CLIP_KNOWN[(b.name||"").toLowerCase()];
     head=`<b>Буфер тримає інша програма</b>
       ${esc(b.name||"невідома програма")}${b.pid?` (PID ${b.pid})`:""}${
       b.title?` — вікно «${esc(b.title)}»`:

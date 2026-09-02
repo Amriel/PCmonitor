@@ -3,7 +3,7 @@
   "UUID": "com.pcmon.metrics",
   "Name": "PC Monitor",
   "Author": "PC Monitor",
-  "Version": "1.0.0.0",
+  "Version": "1.1.0.0",
   "Description": "Живі показники з PC Monitor прямо на клавішах: процесор, пам'ять, GPU, мережа, диск — із міні-графіком за останні хвилини.",
   "Icon": "assets/plugin",
   "Category": "PC Monitor",

@@ -81,6 +81,9 @@ class Notifier:
             if not force and now - last < float(o.get("cooldown_h", 6)) * 3600:
                 return False
             self._last[key] = now
+            if len(self._last) > 500:        # старі ключі (programs, що зникли) — геть
+                for k in [k for k, t in self._last.items() if now - t > 7 * 86400]:
+                    del self._last[k]
             self.history.append({"ts": int(now), "kind": kind, "title": title,
                                  "msg": msg})
             del self.history[:-50]

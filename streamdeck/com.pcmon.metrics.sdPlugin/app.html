@@ -56,6 +56,7 @@ function connectElgatoStreamDeckSocket(inPort, inUUID, inRegisterEvent, inInfo) 
     if (m.event === "willAppear") {
       keys.set(ctx, { settings: m.payload.settings || {}, series: [] });
       if ((m.payload.settings || {}).lang) { LANG = m.payload.settings.lang; langPinned = true; }
+      reschedule();
       draw(ctx);
     } else if (m.event === "willDisappear") {
       keys.delete(ctx);
@@ -63,6 +64,8 @@ function connectElgatoStreamDeckSocket(inPort, inUUID, inRegisterEvent, inInfo) 
       const k = keys.get(ctx);
       if (k) { k.settings = m.payload.settings || {};
         if (k.settings.lang) { LANG = k.settings.lang; langPinned = true; }
+        k.img = null;                 // налаштування змінились — перемалювати
+        reschedule();
         draw(ctx); }
     } else if (m.event === "keyDown") {
       // натиск нічого не змінює в системі — просто оновлюємо негайно
@@ -79,21 +82,48 @@ function port() {
   return "8787";
 }
 
+// Період опитування: налаштування клавіші (1/2/5 с), типово 2 с.
+// Секунда на кожну клавішу — це 60 перемальовувань за хвилину заради
+// цифри, яка й так усереднена; дві секунди виглядають так само живо.
+function interval() {
+  for (const k of keys.values()) {
+    const v = k.settings && +k.settings.interval;
+    if (v >= 1 && v <= 60) return v * 1000;
+  }
+  return 2000;
+}
+
+let polling = false, timer = null;
 async function poll() {
+  if (polling) return;            // попередній запит ще не повернувся —
+  polling = true;                 // інакше запити нашаровуються
   try {
-    const r = await fetch("http://127.0.0.1:" + port() + "/api/sd",
-                          { cache: "no-store" });
-    if (!r.ok) throw new Error(r.status);
-    data = await r.json();
-    lastOk = Date.now();
-    // мова клавіш іде за мовою апки, якщо для клавіші не задано свою
-    if (data && data.lang && !langPinned) LANG = data.lang;
+    const ac = new AbortController();
+    const kill = setTimeout(() => ac.abort(), 2500);
+    try {
+      const r = await fetch("http://127.0.0.1:" + port() + "/api/sd",
+                            { cache: "no-store", signal: ac.signal });
+      if (!r.ok) throw new Error(r.status);
+      data = await r.json();
+      lastOk = Date.now();
+      // мова клавіш іде за мовою апки, якщо для клавіші не задано свою
+      if (data && data.lang && !langPinned) LANG = data.lang;
+    } finally {
+      clearTimeout(kill);
+    }
   } catch (_) {
     data = null;                                  // монітор не відповідає
+  } finally {
+    polling = false;
   }
   for (const ctx of keys.keys()) draw(ctx);
 }
-setInterval(poll, 1000);
+
+function reschedule() {
+  clearInterval(timer);
+  timer = setInterval(poll, interval());
+}
+reschedule();
 poll();
 
 /* ── малювання клавіші ───────────────────────────────────────────────── */
@@ -117,15 +147,29 @@ function plural(n) {          // 1 ядро, 2 ядра, 5 ядер, 32 ядра
   return b === 1 ? "ядро" : "ядер";
 }
 
+const _fit = new Map();          // (текст|ширина|розмір|жирність) -> px
 function fitText(g, text, maxW, startPx, weight) {
   // Зменшуємо шрифт, доки напис не влізе цілком. Обрізати назву посеред
   // слова — саме те, чого ми уникаємо.
+  //
+  // Результат кешуємо: підписи повторюються щосекунди, а кожна зміна
+  // g.font змушує рушій наново шукати й готувати шрифт. Саме цей цикл
+  // (до 34 проходів на напис × 3 написи × кожна клавіша × щосекунди)
+  // і був головним пожирачем процесора в StreamDeck.exe.
+  const ck = text + "|" + maxW + "|" + startPx + "|" + weight;
+  const hit = _fit.get(ck);
+  if (hit !== undefined) {
+    g.font = `${weight} ${hit}px "Segoe UI", system-ui, sans-serif`;
+    return hit;
+  }
   let px = startPx;
   do {
     g.font = `${weight} ${px}px "Segoe UI", system-ui, sans-serif`;
-    if (g.measureText(text).width <= maxW) return px;
+    if (g.measureText(text).width <= maxW) break;
     px -= 1;
   } while (px > 8);
+  if (_fit.size > 500) _fit.clear();
+  _fit.set(ck, px);
   return px;
 }
 
@@ -401,9 +445,19 @@ function drawRamAll(g, c, ctx, s) {
 }
 
 function push(ctx, canvas) {
-  send({ event: "setImage", context: ctx,
-         payload: { image: canvas.toDataURL("image/png"), target: 0 } });
-  // Штатний заголовок вимикаємо: усе, що треба, вже намальовано на картинці.
-  send({ event: "setTitle", context: ctx, payload: { title: "", target: 0 } });
+  // Малюнок не змінився — не надсилаємо нічого. Кожен setImage коштує
+  // Stream Deck-у декодування PNG, масштабування і запис на пристрій по
+  // USB; для клавіш із рідкісними змінами (температури, відеопам'ять)
+  // це була щосекундна робота заради того самого зображення.
+  const img = canvas.toDataURL("image/png");
+  const k = keys.get(ctx);
+  if (k && k.img === img) return;
+  if (k) k.img = img;
+  send({ event: "setImage", context: ctx, payload: { image: img, target: 0 } });
+  // Штатний заголовок вимикаємо один раз: він не повертається сам.
+  if (k && !k.titled) {
+    k.titled = true;
+    send({ event: "setTitle", context: ctx, payload: { title: "", target: 0 } });
+  }
 }
 </script></body></html>

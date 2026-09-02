@@ -148,3 +148,17 @@ window.I18N_RX.push(["^Показати вікно з будь-якого міс
  ["^зараз: (.+)$","now: $1"]);
 Object.assign(window.I18N_EN,{"Сам термінал — на вкладці":"The terminal itself is on the","«Зараз»":"“Now”","поруч із живими показниками.":"tab, next to the live readings."});
 Object.assign(window.I18N_EN,{"центр сповіщень не запущено":"notification center is not running","трей недоступний (запущено з --no-tray?)":"tray unavailable (started with --no-tray?)","сповіщення вимкнено в налаштуваннях":"notifications are disabled in settings"});
+
+// ── 1.4.3: чесна діагностика заблокованого буфера ──
+Object.assign(window.I18N_EN,{
+"Монітор не відповідає.":"The monitor is not responding.",
+"Це не про буфер — збирач зараз перезапускається або зайнятий. Перевірка повториться сама.":"This is not about the clipboard — the collector is restarting or busy. The check will repeat by itself.",
+"Буфер обміну зараз заблокований.":"The clipboard is locked right now.",
+"Повна перевірка не змогла його відкрити — саме тому копіювання й гальмує. Це не помилка монітора, це і є симптом.":"The full check could not open it — that is exactly why copying stalls. This is not a monitor error, it is the symptom itself.",
+"Хто саме тримає — Windows не називає: буває, коли програма встигла закритись або тримає буфер без вікна. Спробуй ще раз за кілька секунд; якщо повторюється — винуватець майже напевно у списку «стежать за буфером» нижче.":"Windows does not name the holder: this happens when the program has already closed or holds the clipboard without a window. Try again in a few seconds; if it repeats, the culprit is almost certainly in the “watching the clipboard” list below.",
+"Тримає його":"Held by","✕ Завершити процес":"✕ End process","Деталі":"Details",
+"працює у фоні, вікна немає":"running in the background, no window",
+"Це і є те гальмо, яке ти ловиш — перевірка впіймала його «на гарячому».":"This is the stall you are chasing — the check caught it in the act.",
+"Оновлювати":"Refresh every","раз на секунду":"once a second","раз на 2 секунди":"once every 2 seconds","раз на 5 секунд":"once every 5 seconds",
+});
+window.I18N_RX.push(["^Буфер не відповів за (\\d+) с\\.$","The clipboard did not respond within $1 s."]);

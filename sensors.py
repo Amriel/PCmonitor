@@ -27,6 +27,7 @@ import logging
 import os
 import re
 import subprocess
+import threading
 import sys
 import time
 
@@ -265,6 +266,7 @@ def thermal_zones():
 #  ЗІБРАТИ ВСЕ
 # =====================================================================
 _cache = {"ts": 0, "data": None}
+_slow_lock = threading.Lock()
 _slow_ts = {"disks": 0, "zones": 0}
 _slow = {"disks": [], "zones": []}
 
@@ -288,7 +290,11 @@ def read_all(force=False):
         src_gpu = "nvidia-smi" if gpus else ""
 
     for key, fn, every in (("disks", disks, 300), ("zones", thermal_zones, 300)):
-        if force or now - _slow_ts[key] > every:
+        with _slow_lock:                 # два потоки не запускають PowerShell двічі
+            due = force or now - _slow_ts[key] > every
+            if due:
+                _slow_ts[key] = now      # резервуємо наперед — інший потік візьме кеш
+        if due:
             try:
                 _slow[key] = fn()
             except Exception:
