@@ -43,6 +43,7 @@ NO_WINDOW = 0x08000000 if IS_WIN else 0
 
 SESSION = "PCMonitorDpcIsr"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_DIR = os.path.join(BASE_DIR, "logs")   # сюди й тільки сюди — сліди трасування
 
 
 # =====================================================================
@@ -554,9 +555,13 @@ class DpcIsrTrace:
                     source = "xperf"
                     self._say("xperf дав рядків", str(len(drivers)))
                     if not drivers:
-                        # зберігаємо сирий звіт, щоб було видно справжній формат
+                        # Зберігаємо сирий звіт, щоб було видно справжній
+                        # формат — але в logs/, а НЕ поруч із кодом. Цей файл
+                        # містить перелік драйверів цієї машини: колись він
+                        # опинився в теці проєкту й доїхав аж на GitHub.
                         try:
-                            rp = os.path.join(BASE_DIR, "xperf_report.txt")
+                            rp = os.path.join(LOG_DIR, "xperf_report.txt")
+                            os.makedirs(LOG_DIR, exist_ok=True)
                             with io.open(rp, "w", encoding="utf-8", errors="replace") as f:
                                 f.write(out)
                             self._say("Сирий звіт xperf збережено", rp)

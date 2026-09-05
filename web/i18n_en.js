@@ -162,3 +162,5 @@ Object.assign(window.I18N_EN,{
 "Оновлювати":"Refresh every","раз на секунду":"once a second","раз на 2 секунди":"once every 2 seconds","раз на 5 секунд":"once every 5 seconds",
 });
 window.I18N_RX.push(["^Буфер не відповів за (\\d+) с\\.$","The clipboard did not respond within $1 s."]);
+// день без даних: «з —» (немає загальної пам'яті ще жодного заміру)
+window.I18N_RX.push(["^з — (.+)$","of — $1"], ["^з —$","of —"]);

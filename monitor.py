@@ -56,7 +56,7 @@ sys.path.insert(0, BASE)
 import psutil  # noqa: E402
 import suspicion  # noqa: E402
 
-VERSION = "1.4.3"
+VERSION = "1.4.4"
 START_MONO = time.monotonic()      # для «не чіпати базу в перші секунди»
 IS_WIN = sys.platform == "win32"
 GITHUB_REPO = "Amriel/PCmonitor"   # звідки апка бере нові релізи
